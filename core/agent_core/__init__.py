@@ -8,6 +8,7 @@ from agent_core.agent import AgentRole, AgentInstance
 from agent_core.soul import Soul, SoulProposal, SoulManager
 from agent_core.spawn import SpawnRole, SpawnRegistry
 from agent_core.mailbox import AgentMailbox
+from agent_core.conversation import ConversationBus, ConversationError
 
 __all__ = [
     "AgentConfig",
@@ -28,6 +29,8 @@ __all__ = [
     "SpawnRole",
     "SpawnRegistry",
     "AgentMailbox",
+    "ConversationBus",
+    "ConversationError",
 ]
 
 from agent_core.llm_cloud import AnthropicLLM, OpenAILLM, FireworksLLM

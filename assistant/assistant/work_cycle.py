@@ -193,9 +193,9 @@ class WorkCycle:
                 )
                 source = "scheduled"
             except queue.Empty:
-                # A peer waiting on our turn preempts the normal rotation; also
-                # capture any conversations that closed since we last looked.
-                self._note_closed_conversations()
+                # A peer waiting on our turn preempts the normal rotation.
+                # (Closed-conversation outcomes are surfaced/acked through the
+                # normal attention path — not silently consumed here.)
                 conv_goal = self._goal_from_conversations()
                 if conv_goal:
                     goal_desc, source = conv_goal, "conversation"
@@ -249,26 +249,6 @@ class WorkCycle:
             "conclusion or the turn limit is close, set done=true to close it. "
             "A peer agent is waiting on your reply — do not ignore it."
         )
-
-    def _note_closed_conversations(self) -> None:
-        """Capture closed-conversation outcomes to the journal, then acknowledge.
-
-        Keeps outcomes in the agent's own store (private memory) without
-        spending a full cycle, and stops them re-surfacing each tick.
-        """
-        if not self._conversations:
-            return
-        for c in self._conversations.needs_attention(limit=10):
-            if c["attention"] != "your_turn" and c["state"] == "closed":
-                if self._journal:
-                    try:
-                        self._journal.add_entry(
-                            f"Conversation #{c['id']} with {c['last_from']} closed "
-                            f"({c['closed_reason']}). Last: {c['last_message']}",
-                            tags="conversation", author="agent")
-                    except Exception:
-                        pass
-                self._conversations.acknowledge(c["id"])
 
     def _goal_from_todos(self) -> str | None:
         if not self._todos:

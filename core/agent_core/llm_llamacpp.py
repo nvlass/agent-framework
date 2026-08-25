@@ -25,7 +25,56 @@ def _strip_thinking_blocks(text: str) -> str:
     return text.strip()
 
 
-_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+_TOOL_CALL_OPEN = "<tool_call>"
+_TOOL_CALL_CLOSE = "</tool_call>"
+_JSON_DECODER = json.JSONDecoder()
+
+
+def _loads_lenient(s: str) -> "dict | None":
+    """Parse a JSON object from ``s``, recovering the breakages small models make.
+
+    Tries, in order: strict parse; raw_decode (ignores trailing text after the
+    object); then appending 1–3 closing braces (a dropped trailing ``}`` is the
+    single most common small-model JSON error). Returns a dict, or None if none
+    of those yield a valid object. Appending only ``}`` never fabricates content —
+    it just closes an object the model forgot to close.
+    """
+    s = s.strip()
+    if not s.startswith("{"):
+        return None
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        pass
+    try:  # trailing text after a complete object (e.g. "{...} </tool_call> junk")
+        obj, _ = _JSON_DECODER.raw_decode(s, 0)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
+    for extra in range(1, 4):  # missing trailing brace(s)
+        try:
+            return json.loads(s + "}" * extra)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def _to_tool_call(obj: dict) -> "dict | None":
+    """Build an OpenAI tool_call dict from a parsed ``{name, arguments}`` object."""
+    if not isinstance(obj, dict):
+        return None
+    name = obj.get("name")
+    if not name:
+        return None
+    args = obj.get("arguments", obj.get("parameters", {}))
+    if not isinstance(args, str):
+        args = json.dumps(args)
+    return {
+        "id": f"call_{uuid.uuid4().hex[:12]}",
+        "type": "function",
+        "function": {"name": name, "arguments": args},
+    }
 
 
 def _extract_tool_calls(text: str) -> "tuple[list[dict], str]":
@@ -36,30 +85,52 @@ def _extract_tool_calls(text: str) -> "tuple[list[dict], str]":
     ``tool_calls`` field — leaving the call stranded in ``content`` where an
     OpenAI client never sees it. This recovers them client-side.
 
-    Returns (tool_calls, remaining_text). Malformed blocks are left in place.
+    Robust to the mess small models produce: a missing/truncated ``</tool_call>``
+    close tag, and slightly-malformed JSON in the body (a dropped closing brace).
+    The tag between markers is parsed leniently (:func:`_loads_lenient`).
+
+    Returns (tool_calls, remaining_text). Unparseable blocks are left in place.
     """
     calls: list[dict] = []
-
-    def _repl(m: "re.Match") -> str:
-        try:
-            obj = json.loads(m.group(1).strip())
-        except json.JSONDecodeError:
-            return m.group(0)  # not valid JSON — leave the block untouched
-        name = obj.get("name")
-        if not name:
-            return m.group(0)
-        args = obj.get("arguments", obj.get("parameters", {}))
-        if not isinstance(args, str):
-            args = json.dumps(args)
-        calls.append({
-            "id": f"call_{uuid.uuid4().hex[:12]}",
-            "type": "function",
-            "function": {"name": name, "arguments": args},
-        })
-        return ""  # drop the parsed block from the text
-
-    remaining = _TOOL_CALL_RE.sub(_repl, text).strip()
+    out: list[str] = []
+    i = 0
+    while True:
+        j = text.find(_TOOL_CALL_OPEN, i)
+        if j == -1:
+            out.append(text[i:])
+            break
+        out.append(text[i:j])  # keep text before the marker
+        k = j + len(_TOOL_CALL_OPEN)
+        close = text.find(_TOOL_CALL_CLOSE, k)
+        body = text[k:close] if close != -1 else text[k:]
+        call = _to_tool_call(_loads_lenient(body))
+        if call:
+            calls.append(call)
+            i = close + len(_TOOL_CALL_CLOSE) if close != -1 else len(text)
+        else:
+            out.append(text[j:k])  # couldn't parse — keep marker, advance past it
+            i = k
+    remaining = "".join(out).strip()
     return calls, remaining
+
+
+def _extract_bare_tool_call(text: str, tool_names: set) -> "dict | None":
+    """Recognise a tool call emitted as bare JSON (no ``<tool_call>`` wrapper).
+
+    Small models (e.g. SmolLM3) sometimes dump ``{"name": ..., "arguments": ...}``
+    straight into content instead of wrapping it — and then neither the server's
+    parser nor _extract_tool_calls (both keyed on ``<tool_call>``) catches it.
+
+    Only converts when the parsed ``name`` matches a KNOWN tool, so ordinary prose
+    or JSON-looking content is never misread as a call. Parses leniently (recovers
+    a dropped brace). Returns an OpenAI tool_call dict, or None.
+    """
+    if not tool_names:
+        return None
+    obj = _loads_lenient(text)
+    if not obj or obj.get("name") not in tool_names:
+        return None
+    return _to_tool_call(obj)
 
 
 def _format_chatml(messages: list[ChatMessage]) -> str:
@@ -243,23 +314,31 @@ class LlamaCppServerLLM(ChatLLMInterface):
             ) from exc
 
         # Post-process the assistant message: strip thinking blocks, and — when
-        # the server left tool calls as raw <tool_call> text in content (some
-        # builds don't parse them) — lift them into a structured tool_calls array
-        # so OpenAI-format callers see a real tool call.
+        # the server left a tool call as text in content (some builds/models
+        # don't structure it) — lift it into a proper tool_calls array so
+        # OpenAI-format callers see a real tool call. Two shapes occur, sometimes
+        # from the same model on different turns:
+        #   - wrapped:  <tool_call>{json}</tool_call>   (_extract_tool_calls)
+        #   - bare:     {json}  with no wrapper          (_extract_bare_tool_call)
         try:
             msg = response["choices"][0]["message"]
-            if msg.get("content"):
+            if msg.get("content") and not msg.get("tool_calls"):
                 content = _strip_thinking_blocks(msg["content"])
-                if not msg.get("tool_calls") and "<tool_call>" in content:
-                    calls, remaining = _extract_tool_calls(content)
-                    if calls:
-                        msg["tool_calls"] = calls
-                        msg["content"] = remaining or None
-                        response["choices"][0]["finish_reason"] = "tool_calls"
-                    else:
-                        msg["content"] = content
+                calls, remaining = _extract_tool_calls(content)
+                if not calls:
+                    tool_names = {t.get("name") for t in (tools or [])
+                                  if isinstance(t, dict)}
+                    bare = _extract_bare_tool_call(content, tool_names)
+                    if bare:
+                        calls, remaining = [bare], ""
+                if calls:
+                    msg["tool_calls"] = calls
+                    msg["content"] = remaining or None
+                    response["choices"][0]["finish_reason"] = "tool_calls"
                 else:
                     msg["content"] = content
+            elif msg.get("content"):
+                msg["content"] = _strip_thinking_blocks(msg["content"])
         except (KeyError, IndexError):
             pass
         return response

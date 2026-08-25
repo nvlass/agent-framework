@@ -205,6 +205,25 @@ def build_mailbox(cfg: dict, config_dir: "Path | None" = None):
     return AgentMailbox(db_path=path, agent_name=str(agent_name))
 
 
+def build_conversation_bus(cfg: dict, config_dir: "Path | None" = None):
+    """Build a ConversationBus from config.  Returns None if not configured.
+
+    Shares the mailbox's requirements and file — ``name:`` + ``mailbox_db:`` —
+    since conversations live in the same shared channel as mailbox messages.
+    No separate config needed: any agent with a mailbox also gets structured
+    turn-taking conversations.
+    """
+    db_path = cfg.get("mailbox_db")
+    agent_name = cfg.get("name")
+    if not db_path or not agent_name:
+        return None
+    from agent_core.conversation import ConversationBus
+    path = Path(db_path)
+    if not path.is_absolute() and config_dir:
+        path = config_dir / path
+    return ConversationBus(db_path=path, agent_name=str(agent_name))
+
+
 def build_session_handoff(cfg: dict, default_dir):
     """Build a SessionHandoff from config. Returns None unless opted in.
 

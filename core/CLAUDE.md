@@ -59,6 +59,7 @@ AgentInstance (runtime: role + llm + registry + assembler + memory)
 | `SpawnRole` | spawn.py | Role definition (soul, tools, optional LLM) for a child agent |
 | `SpawnRegistry` | spawn.py | Registry of named roles; built from `spawn_roles:` YAML section |
 | `AgentMailbox` | mailbox.py | SQLite-backed async message bus; WAL mode for cross-process safety |
+| `ConversationBus` | conversation.py | Bounded turn-taking dialogue over the shared channel; lifecycle + termination guarantee |
 
 ## LLM Response Format
 
@@ -118,14 +119,41 @@ msgs = mailbox.inbox(unread_only=True)
 mailbox.reply_to_message(msgs[0]["id"], "Looks good, one concern…")
 ```
 
-**Spawn vs Mailbox at a glance:**
+### Conversation — bounded turn-taking dialogue
 
-| | Spawn | Mailbox |
-|---|---|---|
-| Direction | Parent → Child | Peer ↔ Peer |
-| Blocking | Yes (request/response) | No (fire-and-forget) |
-| Child lifetime | Task duration only | N/A — both agents persist |
-| Good for | Sub-task delegation | Ongoing coordination |
+Where the mailbox is fire-and-forget, `ConversationBus` is a *structured
+conversation*: two agents exchange turns on a topic with a lifecycle
+(`active → closed`), enforced turn-taking, and a hard termination guarantee —
+either an explicit `done` or a `max_turns` cap (the backstop against two
+autonomous agents ping-ponging forever). It shares the same physical file as the
+mailbox ("the shared channel") and touches nothing else: each agent's memory,
+journal, and soul stay private. **Private minds, shared channel** — sharing is
+explicit (take a turn), never ambient.
+
+```python
+bus = ConversationBus("/shared/agents.db", agent_name="ada")
+c = bus.open(peer="smith", message="What's your read on X?", topic="scag", max_turns=6)
+# … smith's process, same file:
+for c in smith_bus.needs_attention():        # 'your_turn' or 'unread'
+    smith_bus.reply(c["id"], "I think Y…")    # atomic turn-claim
+```
+
+Fits interval-ticking daemons: no simultaneous liveness. Each tick an agent
+calls `needs_attention()`; the turn-claim in `reply()` is atomic (BEGIN
+IMMEDIATE) so two daemons on the same tick can't both take the same turn. In the
+assistant, exposed as `talk_to` / `talk_reply` / `talk_history` / `talk_check`,
+and a pending turn preempts the work-cycle goal rotation (a peer is blocked on
+the reply).
+
+**Spawn vs Mailbox vs Conversation at a glance:**
+
+| | Spawn | Mailbox | Conversation |
+|---|---|---|---|
+| Direction | Parent → Child | Peer ↔ Peer | Peer ↔ Peer |
+| Blocking | Yes (request/response) | No (fire-and-forget) | No (turn-taking) |
+| Shape | One call, one result | Independent messages | Bounded multi-turn dialogue |
+| Terminates | On child return | N/A | `done` or `max_turns` (guaranteed) |
+| Good for | Sub-task delegation | Ongoing coordination | Consult / debate / negotiate |
 
 ## Testing
 

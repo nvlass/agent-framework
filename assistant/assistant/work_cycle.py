@@ -118,6 +118,7 @@ class WorkCycle:
         todo_db=None,
         research_agenda=None,
         memory_tools=None,
+        conversation_bus=None,
         interval_seconds: int = 3600,
         max_iterations: int = 8,
         on_cycle=None,
@@ -148,6 +149,7 @@ class WorkCycle:
         self._todos = todo_db
         self._agenda = research_agenda
         self._memory = memory_tools
+        self._conversations = conversation_bus
         self._interval = interval_seconds
         self._max_iterations = max_iterations
         self._on_cycle = on_cycle
@@ -191,7 +193,13 @@ class WorkCycle:
                 )
                 source = "scheduled"
             except queue.Empty:
-                if time.time() >= next_cycle:
+                # A peer waiting on our turn preempts the normal rotation; also
+                # capture any conversations that closed since we last looked.
+                self._note_closed_conversations()
+                conv_goal = self._goal_from_conversations()
+                if conv_goal:
+                    goal_desc, source = conv_goal, "conversation"
+                elif time.time() >= next_cycle:
                     goal_desc, source = self._pick_goal()
                     next_cycle = time.time() + self._interval
             if goal_desc:
@@ -214,6 +222,53 @@ class WorkCycle:
                 self._source_cursor = (self._source_cursor + offset + 1) % len(sources)
                 return goal_desc, source
         return None, None
+
+    def _goal_from_conversations(self) -> str | None:
+        """A pending conversation turn becomes a high-priority goal.
+
+        A peer agent is blocked waiting on our reply, so this runs ahead of the
+        normal source rotation (checked every tick, not interval-gated).
+        """
+        if not self._conversations:
+            return None
+        pending = [c for c in self._conversations.needs_attention(limit=5)
+                   if c["attention"] == "your_turn"]
+        if not pending:
+            return None
+        c = pending[0]
+        hist = self._conversations.history(c["id"])
+        transcript = "\n".join(
+            f"  {t['turn_no']}. {t['from_agent']}: {t['message']}" for t in hist)
+        topic = f" about {c['topic']}" if c["topic"] else ""
+        return (
+            f"You are in a conversation (#{c['id']}) with {c['last_from']}{topic} "
+            f"and it is your turn (turn {c['turn_count']}/{c['max_turns']}). "
+            f"The conversation so far:\n{transcript}\n\n"
+            f"Reply using the talk_reply tool with conversation_id={c['id']}. "
+            "Advance the discussion substantively; if it has reached a natural "
+            "conclusion or the turn limit is close, set done=true to close it. "
+            "A peer agent is waiting on your reply — do not ignore it."
+        )
+
+    def _note_closed_conversations(self) -> None:
+        """Capture closed-conversation outcomes to the journal, then acknowledge.
+
+        Keeps outcomes in the agent's own store (private memory) without
+        spending a full cycle, and stops them re-surfacing each tick.
+        """
+        if not self._conversations:
+            return
+        for c in self._conversations.needs_attention(limit=10):
+            if c["attention"] != "your_turn" and c["state"] == "closed":
+                if self._journal:
+                    try:
+                        self._journal.add_entry(
+                            f"Conversation #{c['id']} with {c['last_from']} closed "
+                            f"({c['closed_reason']}). Last: {c['last_message']}",
+                            tags="conversation", author="agent")
+                    except Exception:
+                        pass
+                self._conversations.acknowledge(c["id"])
 
     def _goal_from_todos(self) -> str | None:
         if not self._todos:

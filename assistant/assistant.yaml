@@ -215,6 +215,12 @@ log_level: WARNING
 #
 # name: agent_smith                         # This agent's identity in the message bus
 # mailbox_db: /shared/agent_mailbox.db      # Shared across all agents
+#
+# Setting name + mailbox_db also enables bounded turn-taking CONVERSATIONS
+# (talk_to / talk_reply / talk_history / talk_check) over the same shared file —
+# a real back-and-forth dialogue with a hard turn cap, distinct from the
+# fire-and-forget mailbox. No extra config needed. Private minds, shared channel:
+# only the channel file is shared; each agent's memory/journal/soul stay private.
 
 # ---------------------------------------------------------------------------
 # Spawn roles — specialist sub-agents this agent can delegate to
@@ -258,4 +264,6 @@ log_level: WARNING
 #   inner_voice:    true   # list/dismiss/queue pending messages
 #   skills:         true   # list_skills/invoke_skill/propose_skill
 #   spawn:          true   # spawn_agent (requires spawn_roles above)
+#   mailbox:        true   # send_message/check_inbox/reply (requires name + mailbox_db)
+#   talk:           true   # talk_to/talk_reply/talk_history (turn-taking conversations)
 #   mail:           true   # send_email (requires mail: section above)

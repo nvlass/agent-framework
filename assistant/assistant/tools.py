@@ -12,6 +12,8 @@ Tools available to the personal assistant:
   - recall:          Search long-term memory for relevant context
   - todo_add / todo_list / todo_done / todo_note: TODO management
   - journal_add / journal_read / journal_search: Daily journal
+  - talk_to / talk_reply / talk_history / talk_check: bounded turn-taking
+                     conversations with other agents (requires a ConversationBus)
 
 Memory, TODO, and journal tools are only registered when their respective
 backends are provided. web_search requires duckduckgo-search installed.
@@ -57,6 +59,7 @@ def build_assistant_tools(
     skill_library=None,
     spawn_registry=None,
     mailbox=None,
+    conversation_bus=None,
     file_tools=None,
     mail_sender=None,
     digest_llm=None,
@@ -80,6 +83,8 @@ def build_assistant_tools(
         spawn_registry:   Optional SpawnRegistry — enables spawn_agent tool.
         mailbox:          Optional AgentMailbox — enables send_message, check_inbox,
                           reply_to_message tools.
+        conversation_bus: Optional ConversationBus — enables talk_to, talk_reply,
+                          talk_history tools (bounded turn-taking dialogue).
         file_tools:       Optional FileTools — enables write_file, read_file, list_files,
                           all sandboxed to the configured work_dir.
         mail_sender:      Optional MailSender — enables the send_email tool, jailed
@@ -882,6 +887,117 @@ def build_assistant_tools(
             returns="string",
             permission=PermissionLevel.SAFE,
             execute=_reply_to_message,
+        ))
+
+    # ------------------------------------------------------------------
+    # talk — bounded turn-taking conversations with other agents
+    # ------------------------------------------------------------------
+    if conversation_bus and _on("talk"):
+        from agent_core.conversation import ConversationError
+
+        def _talk_to(agent: str, message: str, topic: str = "",
+                     max_turns: int = 6) -> str:
+            try:
+                c = conversation_bus.open(peer=agent, message=message,
+                                          topic=topic, max_turns=int(max_turns))
+            except ConversationError as exc:
+                return f"Could not start conversation: {exc}"
+            return (f"Opened conversation #{c['id']} with {agent}"
+                    f"{f' about {topic}' if topic else ''}. It's their turn now — "
+                    f"they'll reply on their next cycle (up to {c['max_turns']} turns; "
+                    f"end it early by replying with done=true).")
+
+        def _talk_reply(conversation_id: int, message: str,
+                        done: bool = False) -> str:
+            try:
+                c = conversation_bus.reply(int(conversation_id), message,
+                                           done=bool(done))
+            except ConversationError as exc:
+                return f"Could not reply: {exc}"
+            if c["state"] == "closed":
+                why = {"done": "you closed it", "turn_limit": "turn limit reached",
+                       }.get(c["closed_reason"], c["closed_reason"])
+                return f"Conversation #{c['id']} is now closed ({why})."
+            return (f"Replied in #{c['id']} (turn {c['turn_count']}/{c['max_turns']}); "
+                    f"it's {c['next_turn']}'s turn now.")
+
+        def _talk_history(conversation_id: int) -> str:
+            try:
+                c = conversation_bus.get(int(conversation_id))
+            except ConversationError as exc:
+                return str(exc)
+            turns = conversation_bus.history(int(conversation_id))
+            conversation_bus.acknowledge(int(conversation_id))  # reading = seen
+            other = c["peer"] if c["initiator"] == conversation_bus.name else c["initiator"]
+            topic_str = f" [{c['topic']}]" if c["topic"] else ""
+            head = f"Conversation #{c['id']} with {other}{topic_str} — {c['state']}"
+            body = "\n".join(f"  {t['turn_no']}. {t['from_agent']}: {t['message']}"
+                             for t in turns)
+            return f"{head}\n{body}"
+
+        def _talk_check() -> str:
+            s = conversation_bus.format_attention(limit=10)
+            return s or "No conversations awaiting you."
+
+        registry.register(ToolDefinition(
+            name="talk_to",
+            description=(
+                "Start a back-and-forth conversation with another agent by name "
+                "(bounded turn-taking — use this instead of send_message when you "
+                "want a real dialogue, e.g. to consult or debate). You take the "
+                "first turn; they reply on their next cycle. The conversation "
+                "always ends — after max_turns, or when either side replies with "
+                "done=true."
+            ),
+            parameters=[
+                ToolParameter("agent", "string", "Name of the agent to talk to"),
+                ToolParameter("message", "string", "Your opening message"),
+                ToolParameter("topic", "string", "Optional short topic label", required=False),
+                ToolParameter("max_turns", "integer",
+                              "Max total turns before it auto-closes (default 6)",
+                              required=False),
+            ],
+            returns="string",
+            permission=PermissionLevel.SAFE,
+            execute=_talk_to,
+        ))
+
+        registry.register(ToolDefinition(
+            name="talk_reply",
+            description=(
+                "Reply in an ongoing conversation when it is your turn. Set "
+                "done=true to end the conversation with this message."
+            ),
+            parameters=[
+                ToolParameter("conversation_id", "integer", "The conversation's ID"),
+                ToolParameter("message", "string", "Your reply"),
+                ToolParameter("done", "boolean",
+                              "If true, this reply closes the conversation",
+                              required=False),
+            ],
+            returns="string",
+            permission=PermissionLevel.SAFE,
+            execute=_talk_reply,
+        ))
+
+        registry.register(ToolDefinition(
+            name="talk_history",
+            description="Read the full turn-by-turn history of a conversation by ID.",
+            parameters=[
+                ToolParameter("conversation_id", "integer", "The conversation's ID"),
+            ],
+            returns="string",
+            permission=PermissionLevel.SAFE,
+            execute=_talk_history,
+        ))
+
+        registry.register(ToolDefinition(
+            name="talk_check",
+            description="List conversations that are awaiting your turn or reply.",
+            parameters=[],
+            returns="string",
+            permission=PermissionLevel.SAFE,
+            execute=_talk_check,
         ))
 
     # ------------------------------------------------------------------

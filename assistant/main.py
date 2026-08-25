@@ -42,6 +42,7 @@ from assistant.config import (
     _SCRIPT_DIR,
     _make_llm,
     build_mail_sender as _build_mail_sender,
+    build_conversation_bus as _build_conversation_bus,
     build_mailbox as _build_mailbox,
     build_memory as _build_memory,
     build_router as _build_router,
@@ -259,6 +260,7 @@ def main():
     config_dir = Path(args.config).parent if args.config else None
     spawn_registry = _build_spawn_registry(cfg, config_dir=config_dir)
     mailbox = _build_mailbox(cfg, config_dir=config_dir)
+    conversation_bus = _build_conversation_bus(cfg, config_dir=config_dir)
     mail_sender = _build_mail_sender(cfg)
     work_dir_str = cfg.get("work_dir")
     file_tools = FileTools(Path(work_dir_str)) if work_dir_str else None
@@ -270,6 +272,7 @@ def main():
                                      skill_library=skill_library,
                                      spawn_registry=spawn_registry,
                                      mailbox=mailbox,
+                                     conversation_bus=conversation_bus,
                                      file_tools=file_tools,
                                      mail_sender=mail_sender,
                                      digest_llm=router.for_task("compaction"),
@@ -332,6 +335,7 @@ def main():
             todo_db=todo_db,
             research_agenda=research_agenda,
             memory_tools=memory,
+            conversation_bus=conversation_bus,
             interval_seconds=wc_interval,
             max_iterations=int(wc_cfg.get("max_iterations", 8)),
             on_cycle=lambda source, outcome, summary: (
@@ -511,6 +515,22 @@ def main():
                         f"[Mailbox from {m['from_agent']}{topic_str}] {m['message']}"
                     )
                     mailbox.mark_read(m["id"])
+
+            # Inject conversations awaiting this agent (its turn, or a closed outcome)
+            if conversation_bus:
+                for c in conversation_bus.needs_attention(limit=3):
+                    if c["attention"] == "your_turn":
+                        buffer.add_background_note(
+                            f"[Conversation #{c['id']} — your turn] {c['last_from']} "
+                            f"said: {c['last_message']} "
+                            f"(reply with talk_reply; turn {c['turn_count']}/{c['max_turns']})"
+                        )
+                    else:  # closed/unread outcome — surface once, then ack
+                        buffer.add_background_note(
+                            f"[Conversation #{c['id']} — {c['state']}] {c['last_from']} "
+                            f"said: {c['last_message']}"
+                        )
+                        conversation_bus.acknowledge(c["id"])
 
             # Agentic tool loop — keep calling until the model stops using tools
             while True:

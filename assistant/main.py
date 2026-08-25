@@ -215,7 +215,8 @@ def main():
 
     soul_manager = SoulManager(soul_arg=soul_path, data_db=data_db_path)
     soul, soul_source = soul_manager.load()
-    llm = _make_llm(model, max_tokens=8192, min_request_interval=1.0)
+    llm = _make_llm(model, max_tokens=8192, min_request_interval=1.0,
+                    sampling=cfg.get("sampling"))
     if not llm.is_available():
         _provider, _env = _provider_for(model)
         if _env is None:  # local server: availability is a health check, not a key

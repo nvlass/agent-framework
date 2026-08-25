@@ -50,9 +50,22 @@ class LlamaCppServerLLM(ChatLLMInterface):
     metadata, so no manual formatting needed.
     """
 
+    # Sampling defaults mirror llama-cli's, which the OpenAI /v1 endpoint does
+    # NOT apply on its own. Without repeat_penalty especially, small models loop
+    # ("repeats the same thing every answer"). These are sent on every request;
+    # override any of them via the `sampling` arg (e.g. from YAML) per model.
+    _DEFAULT_SAMPLING = {
+        "top_p": 0.95,
+        "top_k": 40,
+        "min_p": 0.05,
+        "repeat_penalty": 1.1,
+        "repeat_last_n": 64,
+    }
+
     def __init__(self, port: int = 7788, host: str = "localhost",
                  base_url: Optional[str] = None, timeout_seconds: int = 120,
-                 max_tokens: int = 512, model: str = "local") -> None:
+                 max_tokens: int = 512, model: str = "local",
+                 sampling: Optional[dict] = None) -> None:
         """Initialize server backend.
 
         Args:
@@ -66,9 +79,13 @@ class LlamaCppServerLLM(ChatLLMInterface):
             max_tokens: Default max output tokens per request.
             model: Label reported as the model name (llama-server serves one
                 model and echoes this back).
+            sampling: Optional sampling overrides merged over _DEFAULT_SAMPLING
+                (top_p, top_k, min_p, repeat_penalty, repeat_last_n). Small
+                models especially need repeat_penalty to avoid degenerate loops.
         """
         self._base_url = (base_url.rstrip("/") if base_url
                           else f"http://{host}:{port}")
+        self._sampling = {**self._DEFAULT_SAMPLING, **(sampling or {})}
         self._timeout = timeout_seconds
         self._max_tokens = max_tokens
         self._model = model
@@ -101,7 +118,8 @@ class LlamaCppServerLLM(ChatLLMInterface):
         req_map = {'messages': [{'content': msg.content, 'role': msg.role} for msg in messages],
                    'max_tokens': effective_max_tokens,
                    'temperature': temperature,
-                   'cache_prompt': False}
+                   'cache_prompt': False,
+                   **self._sampling}
         if tools:
             req_map['tools'] = [
                 {'type': 'function', 'function': schema}
@@ -161,6 +179,7 @@ class LlamaCppServerLLM(ChatLLMInterface):
             "max_tokens": effective_max_tokens,
             "temperature": temperature,
             "cache_prompt": False,
+            **self._sampling,
         }
         if tools:
             body["tools"] = [{"type": "function", "function": s} for s in tools]

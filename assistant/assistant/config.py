@@ -164,7 +164,8 @@ def provider_for(model_id: str) -> tuple[str, str]:
     return "Fireworks", "FIREWORKS_API_KEY"
 
 
-def _make_llm(model_id: str, max_tokens: int = 8192, min_request_interval: float = 1.0):
+def _make_llm(model_id: str, max_tokens: int = 8192, min_request_interval: float = 1.0,
+              sampling: dict | None = None):
     """Instantiate the right LLM class from a model ID string.
 
     Dispatch rules (checked in order):
@@ -189,7 +190,7 @@ def _make_llm(model_id: str, max_tokens: int = 8192, min_request_interval: float
             else:
                 host, port = parts[0], int(parts[1])
         return LlamaCppServerLLM(host=host, port=port, max_tokens=max_tokens,
-                                 model=model_id)
+                                 model=model_id, sampling=sampling)
     if model_id.startswith("grok"):
         import os
         # base_url must NOT include /v1 — OpenAILLM appends /v1/chat/completions.

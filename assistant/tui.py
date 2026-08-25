@@ -446,7 +446,7 @@ class AssistantApp(App):
 
         # Background reflection
         reflection_scheduler = None
-        if memory:
+        if memory and reflect_interval > 0:
             def _do_reflect() -> None:
                 try:
                     hours = max(1, (reflect_interval * 2) // 3600)

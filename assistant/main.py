@@ -291,7 +291,7 @@ def main():
 
     # Periodic reflection
     scheduler = None
-    if memory:
+    if memory and reflect_interval > 0:
         scheduler = ReflectionScheduler(
             interval_seconds=reflect_interval,
             callback=lambda: _reflect(memory, reflect_interval, inner_voice, transcript),
@@ -362,7 +362,8 @@ def main():
     log_info    = f"  Log    : {log_file} | {transcript._path.name}"
     soul_info   = f"  Soul   : {soul_source}"
     router_info = router.describe()
-    ref_info    = f"  Reflect: every {reflect_interval}s" if memory else ""
+    ref_info    = (f"  Reflect: every {reflect_interval}s" if memory and reflect_interval > 0
+                   else "  Reflect: off" if memory else "")
     cur_info    = f"  Curious: every {curiosity_interval}s" if curiosity else ""
     nudge_info  = f"  Nudge  : every {nudge_interval}s" if nudge_monitor and nudge_monitor.enabled else ""
     files_info  = f"  Files  : {file_tools.work_dir}" if file_tools else ""

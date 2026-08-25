@@ -24,9 +24,13 @@ model: accounts/fireworks/models/gpt-oss-120b
 # Per-task model overrides.
 # Any task not listed here falls back to the default model above.
 # Provider is auto-detected from the model ID:
-#   - IDs starting with "claude" → AnthropicLLM (needs ANTHROPIC_API_KEY)
-#   - IDs starting with "grok"   → OpenAILLM @ api.x.ai (needs XAI_API_KEY)
-#   - Everything else            → FireworksLLM (needs FIREWORKS_API_KEY)
+#   - IDs starting with "claude"   → AnthropicLLM (needs ANTHROPIC_API_KEY)
+#   - IDs starting with "grok"     → OpenAILLM @ api.x.ai (needs XAI_API_KEY)
+#   - IDs starting with "llamacpp" → local/remote llama-server (no API key)
+#       llamacpp            → localhost:7788
+#       llamacpp:8080       → localhost:8080
+#       llamacpp:pi.local:7788 → remote host:port
+#   - Everything else              → FireworksLLM (needs FIREWORKS_API_KEY)
 # Supported tasks: conversation, curiosity, inner_voice, compaction, nudge
 # (reflection is reserved for future memory-LLM routing)
 #

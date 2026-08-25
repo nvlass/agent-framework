@@ -218,8 +218,13 @@ def main():
     llm = _make_llm(model, max_tokens=8192, min_request_interval=1.0)
     if not llm.is_available():
         _provider, _env = _provider_for(model)
-        print(f"Error: {_env} not set (required for {_provider} model '{model}').",
-              file=sys.stderr)
+        if _env is None:  # local server: availability is a health check, not a key
+            print(f"Error: cannot reach {_provider} server for model '{model}' — "
+                  f"is llama-server running and listening on the configured host/port?",
+                  file=sys.stderr)
+        else:
+            print(f"Error: {_env} not set (required for {_provider} model '{model}').",
+                  file=sys.stderr)
         sys.exit(1)
 
     router = _build_router(cfg, llm)

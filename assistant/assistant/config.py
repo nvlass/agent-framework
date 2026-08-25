@@ -159,6 +159,8 @@ def provider_for(model_id: str) -> tuple[str, str]:
         return "Anthropic", "ANTHROPIC_API_KEY"
     if model_id.startswith("grok"):
         return "xAI", "XAI_API_KEY"
+    if model_id.startswith("llamacpp"):
+        return "llama.cpp", None  # local server — no API key, availability = health
     return "Fireworks", "FIREWORKS_API_KEY"
 
 
@@ -166,13 +168,28 @@ def _make_llm(model_id: str, max_tokens: int = 8192, min_request_interval: float
     """Instantiate the right LLM class from a model ID string.
 
     Dispatch rules (checked in order):
-    - ``claude*``  → AnthropicLLM         (reads ANTHROPIC_API_KEY)
-    - ``grok*``    → OpenAILLM at api.x.ai (reads XAI_API_KEY)
-    - everything else → FireworksLLM       (reads FIREWORKS_API_KEY)
+    - ``claude*``    → AnthropicLLM          (reads ANTHROPIC_API_KEY)
+    - ``grok*``      → OpenAILLM at api.x.ai  (reads XAI_API_KEY)
+    - ``llamacpp*``  → LlamaCppServerLLM      (local/remote llama-server, no key)
+      Forms: ``llamacpp`` (localhost:7788), ``llamacpp:PORT``,
+      ``llamacpp:HOST:PORT`` (e.g. ``llamacpp:pi.local:7788``).
+    - everything else → FireworksLLM          (reads FIREWORKS_API_KEY)
     """
     from agent_core.llm_cloud import AnthropicLLM, FireworksLLM, OpenAILLM
     if model_id.startswith("claude"):
         return AnthropicLLM(model=model_id, max_tokens=max_tokens)
+    if model_id.startswith("llamacpp"):
+        from agent_core.llm_llamacpp import LlamaCppServerLLM
+        spec = model_id[len("llamacpp"):].lstrip(":")
+        host, port = "localhost", 7788
+        if spec:
+            parts = spec.split(":")
+            if len(parts) == 1:
+                port = int(parts[0])
+            else:
+                host, port = parts[0], int(parts[1])
+        return LlamaCppServerLLM(host=host, port=port, max_tokens=max_tokens,
+                                 model=model_id)
     if model_id.startswith("grok"):
         import os
         # base_url must NOT include /v1 — OpenAILLM appends /v1/chat/completions.

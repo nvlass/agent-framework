@@ -50,19 +50,28 @@ class LlamaCppServerLLM(ChatLLMInterface):
     metadata, so no manual formatting needed.
     """
 
-    def __init__(self, port: int = 7788, timeout_seconds: int = 120,
-                 max_tokens: int = 512) -> None:
+    def __init__(self, port: int = 7788, host: str = "localhost",
+                 base_url: Optional[str] = None, timeout_seconds: int = 120,
+                 max_tokens: int = 512, model: str = "local") -> None:
         """Initialize server backend.
 
         Args:
-            port: Port where llama-server is listening (localhost only).
+            port: Port where llama-server is listening.
+            host: Host where llama-server is listening (default localhost;
+                set to reach a server on another machine).
+            base_url: Full base URL override (e.g. "http://pi.local:7788").
+                Takes precedence over host/port.
             timeout_seconds: HTTP request timeout. Set high enough for
                 slow generation on large prompts.
             max_tokens: Default max output tokens per request.
+            model: Label reported as the model name (llama-server serves one
+                model and echoes this back).
         """
-        self._base_url = f"http://localhost:{port}"
+        self._base_url = (base_url.rstrip("/") if base_url
+                          else f"http://{host}:{port}")
         self._timeout = timeout_seconds
         self._max_tokens = max_tokens
+        self._model = model
 
     def chat(
         self,
@@ -127,6 +136,64 @@ class LlamaCppServerLLM(ChatLLMInterface):
         except urllib.error.URLError as ex:
             raise ConnectionError(ex)
 
+    def call_raw(
+        self,
+        messages: list[dict],
+        max_tokens: int = 0,
+        temperature: float = 0.7,
+        tools: Optional[list[dict]] = None,
+    ) -> dict:
+        """Call /v1/chat/completions with raw OpenAI-format message dicts.
+
+        This is what the assistant layer uses (unlike chat()): it accepts raw
+        dicts so callers can include role="tool" messages with tool_call_id and
+        assistant messages carrying tool_calls. llama-server's endpoint is
+        OpenAI-compatible, so the raw messages pass through unchanged and the
+        response is already OpenAI-shaped. Thinking blocks (<think>…</think>,
+        emitted by small/reasoning models) are stripped from the content.
+
+        Returns the raw completion dict:
+            {"choices": [{"message": {...}}], "usage": {...}}
+        """
+        effective_max_tokens = max_tokens if max_tokens > 0 else self._max_tokens
+        body: dict = {
+            "messages": messages,
+            "max_tokens": effective_max_tokens,
+            "temperature": temperature,
+            "cache_prompt": False,
+        }
+        if tools:
+            body["tools"] = [{"type": "function", "function": s} for s in tools]
+            body["tool_choice"] = "auto"
+        req = urllib.request.Request(
+            f"{self._base_url}/v1/chat/completions",
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(body).encode(),
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                response = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body_text = ""
+            try:
+                body_text = (exc.fp.read() if exc.fp else b"").decode()
+            except Exception:
+                pass
+            raise RuntimeError(f"llama-server error {exc.code}: {body_text}") from exc
+        except urllib.error.URLError as exc:
+            raise ConnectionError(
+                f"Cannot reach llama-server at {self._base_url}: {exc.reason}"
+            ) from exc
+
+        # Strip thinking blocks from the assistant content, if any.
+        try:
+            msg = response["choices"][0]["message"]
+            if msg.get("content"):
+                msg["content"] = _strip_thinking_blocks(msg["content"])
+        except (KeyError, IndexError):
+            pass
+        return response
+
     def is_available(self) -> bool:
         """Check if llama-server is running and ready.
 
@@ -140,6 +207,10 @@ class LlamaCppServerLLM(ChatLLMInterface):
                 return False
         except:
             return False
+
+    @property
+    def model_name(self) -> str:
+        return self._model
 
     @property
     def model_name(self) -> str:

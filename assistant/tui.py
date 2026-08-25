@@ -354,8 +354,12 @@ class AssistantApp(App):
         llm = _make_llm(model, max_tokens=8192, min_request_interval=1.0)
         if not llm.is_available():
             _provider, _env = _provider_for(model)
-            self._sys(f"[red bold]Error: {_env} not set (required for "
-                      f"{_provider} model '{model}').[/red bold]")
+            if _env is None:
+                self._sys(f"[red bold]Error: cannot reach {_provider} server for "
+                          f"model '{model}' — is llama-server running?[/red bold]")
+            else:
+                self._sys(f"[red bold]Error: {_env} not set (required for "
+                          f"{_provider} model '{model}').[/red bold]")
             self.call_from_thread(self.exit)
             return
 

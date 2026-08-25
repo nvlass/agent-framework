@@ -179,7 +179,7 @@ def provider_for(model_id: str) -> tuple[str, str]:
 
 
 def _make_llm(model_id: str, max_tokens: int = 8192, min_request_interval: float = 1.0,
-              sampling: dict | None = None):
+              sampling: dict | None = None, timeout: int | None = None):
     """Instantiate the right LLM class from a model ID string.
 
     Dispatch rules (checked in order):
@@ -189,10 +189,15 @@ def _make_llm(model_id: str, max_tokens: int = 8192, min_request_interval: float
       Forms: ``llamacpp`` (localhost:7788), ``llamacpp:PORT``,
       ``llamacpp:HOST:PORT`` (e.g. ``llamacpp:pi.local:7788``).
     - everything else → FireworksLLM          (reads FIREWORKS_API_KEY)
+
+    timeout: per-request HTTP timeout (seconds). None uses each backend's
+        default, except llama-server which defaults to 300s — a slow local
+        (reasoning) model on CPU routinely needs more than the cloud 120s.
     """
     from agent_core.llm_cloud import AnthropicLLM, FireworksLLM, OpenAILLM
+    cloud_to = {"timeout_seconds": timeout} if timeout else {}
     if model_id.startswith("claude"):
-        return AnthropicLLM(model=model_id, max_tokens=max_tokens)
+        return AnthropicLLM(model=model_id, max_tokens=max_tokens, **cloud_to)
     if model_id.startswith("llamacpp"):
         from agent_core.llm_llamacpp import LlamaCppServerLLM
         spec = model_id[len("llamacpp"):].lstrip(":")
@@ -204,7 +209,8 @@ def _make_llm(model_id: str, max_tokens: int = 8192, min_request_interval: float
             else:
                 host, port = parts[0], int(parts[1])
         return LlamaCppServerLLM(host=host, port=port, max_tokens=max_tokens,
-                                 model=model_id, sampling=sampling)
+                                 model=model_id, sampling=sampling,
+                                 timeout_seconds=timeout or 300)
     if model_id.startswith("grok"):
         import os
         # base_url must NOT include /v1 — OpenAILLM appends /v1/chat/completions.
@@ -213,8 +219,9 @@ def _make_llm(model_id: str, max_tokens: int = 8192, min_request_interval: float
             base_url="https://api.x.ai",
             api_key=os.environ.get("XAI_API_KEY", ""),
             max_tokens=max_tokens,
+            **cloud_to,
         )
-    return FireworksLLM(model=model_id, max_tokens=max_tokens,
+    return FireworksLLM(model=model_id, max_tokens=max_tokens, **cloud_to,
                         min_request_interval=min_request_interval)
 
 

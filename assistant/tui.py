@@ -353,7 +353,7 @@ class AssistantApp(App):
         self._set_title(f"{display_name} ({short_model})")
 
         llm = _make_llm(model, max_tokens=8192, min_request_interval=1.0,
-                        sampling=cfg.get("sampling"))
+                        sampling=cfg.get("sampling"), timeout=cfg.get("request_timeout"))
         if not llm.is_available():
             _provider, _env = _provider_for(model)
             if _env is None:

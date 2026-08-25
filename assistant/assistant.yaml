@@ -64,6 +64,12 @@ data_db: assistant_data.db
 # Auto-compact conversation when it exceeds this many characters.
 max_chars: 32000
 
+# Per-request LLM timeout (seconds). Omit to use the backend default: 120s for
+# cloud providers, 300s for local llama-server. Raise it for a slow local
+# (reasoning) model on CPU — a 3B generating a long think + reply can exceed
+# even 300s. e.g. request_timeout: 600
+# request_timeout: 600
+
 # Sampling overrides — only applied to local llama-server models (llamacpp*).
 # The OpenAI /v1 endpoint does NOT apply llama-cli's sampling defaults on its
 # own; without repeat_penalty especially, small models loop ("repeats the same

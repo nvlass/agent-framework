@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import urllib.request
 import urllib.error
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -22,6 +23,43 @@ def _strip_thinking_blocks(text: str) -> str:
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     text = re.sub(r"<\|channel>thought\n.*?<channel\|>", "", text, flags=re.DOTALL)
     return text.strip()
+
+
+_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+
+
+def _extract_tool_calls(text: str) -> "tuple[list[dict], str]":
+    """Lift ``<tool_call>{json}</tool_call>`` blocks out of content into OpenAI shape.
+
+    Some models (SmolLM3, Hermes, Qwen) emit tool calls as ``<tool_call>`` XML in
+    the text, and some llama.cpp builds do not parse that back into the response's
+    ``tool_calls`` field — leaving the call stranded in ``content`` where an
+    OpenAI client never sees it. This recovers them client-side.
+
+    Returns (tool_calls, remaining_text). Malformed blocks are left in place.
+    """
+    calls: list[dict] = []
+
+    def _repl(m: "re.Match") -> str:
+        try:
+            obj = json.loads(m.group(1).strip())
+        except json.JSONDecodeError:
+            return m.group(0)  # not valid JSON — leave the block untouched
+        name = obj.get("name")
+        if not name:
+            return m.group(0)
+        args = obj.get("arguments", obj.get("parameters", {}))
+        if not isinstance(args, str):
+            args = json.dumps(args)
+        calls.append({
+            "id": f"call_{uuid.uuid4().hex[:12]}",
+            "type": "function",
+            "function": {"name": name, "arguments": args},
+        })
+        return ""  # drop the parsed block from the text
+
+    remaining = _TOOL_CALL_RE.sub(_repl, text).strip()
+    return calls, remaining
 
 
 def _format_chatml(messages: list[ChatMessage]) -> str:
@@ -204,11 +242,24 @@ class LlamaCppServerLLM(ChatLLMInterface):
                 f"Cannot reach llama-server at {self._base_url}: {exc.reason}"
             ) from exc
 
-        # Strip thinking blocks from the assistant content, if any.
+        # Post-process the assistant message: strip thinking blocks, and — when
+        # the server left tool calls as raw <tool_call> text in content (some
+        # builds don't parse them) — lift them into a structured tool_calls array
+        # so OpenAI-format callers see a real tool call.
         try:
             msg = response["choices"][0]["message"]
             if msg.get("content"):
-                msg["content"] = _strip_thinking_blocks(msg["content"])
+                content = _strip_thinking_blocks(msg["content"])
+                if not msg.get("tool_calls") and "<tool_call>" in content:
+                    calls, remaining = _extract_tool_calls(content)
+                    if calls:
+                        msg["tool_calls"] = calls
+                        msg["content"] = remaining or None
+                        response["choices"][0]["finish_reason"] = "tool_calls"
+                    else:
+                        msg["content"] = content
+                else:
+                    msg["content"] = content
         except (KeyError, IndexError):
             pass
         return response

@@ -60,6 +60,7 @@ from assistant.config import (
     build_session_handoff as _build_session_handoff,
     build_spawn_registry as _build_spawn_registry,
     detect_vector_backend as _detect_vector_backend,
+    effective_backend as _effective_backend,
     fmt_args as _fmt_args,
     format_tag_cloud as _format_tag_cloud,
     load_config as _load_config,
@@ -366,9 +367,9 @@ class AssistantApp(App):
 
         router = _build_router(cfg, llm)
         critic = CriticPass(router.for_task("conversation"), soul) if cfg.get("critic_pass") else None
-        memory = _build_memory(db, llm=llm) if db else None
+        memory = _build_memory(db, llm=llm, backend=cfg.get("memory_backend")) if db else None
         extraction_interval = cfg.get("extraction_interval", 0)
-        vec_backend = _detect_vector_backend() if memory else "off"
+        vec_backend = _effective_backend(cfg) if memory else "off"
         data_db = Path(data_db_path)
         transcript = Transcript(data_db.with_suffix("").parent / "assistant_transcript.md")
         # Rolling log file

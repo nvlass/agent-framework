@@ -73,16 +73,24 @@ def detect_vector_backend() -> str:
     return "lite"
 
 
-def build_memory(db_path: str, llm=None):
+def build_memory(db_path: str, llm=None, backend: str | None = None):
     """
-    Build a memory backend, auto-detecting the best available vector store.
+    Build a memory backend.
 
-    Priority: chromadb → sqlite-vec → LiteMemory (keyword-only, no vectors).
-    Falls back to LiteMemory if agent-memory itself is not installed.
+    Priority when auto-detecting: chromadb → sqlite-vec → LiteMemory
+    (keyword-only, no vectors). Falls back to LiteMemory if agent-memory
+    itself is not installed.
+
+    Args:
+        backend: force a specific backend — "chromadb", "sqlite-vec", or
+            "lite". None (default) auto-detects. Use "lite" to keep an agent
+            fully local/keyless (FTS keyword recall, no embeddings) even on a
+            machine where chromadb is installed — e.g. a small local model.
     """
-    backend = detect_vector_backend()
+    forced_lite = backend == "lite"
+    chosen = backend or detect_vector_backend()
 
-    if backend in ("chromadb", "sqlite-vec"):
+    if chosen in ("chromadb", "sqlite-vec"):
         try:
             from agent_memory import MemoryStore, MemoryTools
             from assistant.llm_adapter import FireworksEmbeddingGenerator, FireworksMemoryLLM
@@ -91,7 +99,7 @@ def build_memory(db_path: str, llm=None):
             store = MemoryStore(
                 db_path=db_path,
                 embedding_generator=embedding_gen,
-                backend=backend,
+                backend=chosen,
             )
             memory_llm = FireworksMemoryLLM(llm) if llm else None
             return MemoryTools(store=store, llm=memory_llm)
@@ -99,11 +107,17 @@ def build_memory(db_path: str, llm=None):
             pass  # agent-memory not installed, fall through to LiteMemory
 
     from assistant.lite_memory import LiteMemory
-    print(
-        "Note: using lightweight SQLite memory (install chromadb or sqlite-vec for semantic recall).",
-        file=sys.stderr,
-    )
+    if not forced_lite:
+        print(
+            "Note: using lightweight SQLite memory (install chromadb or sqlite-vec for semantic recall).",
+            file=sys.stderr,
+        )
     return LiteMemory(db_path, llm=llm)
+
+
+def effective_backend(cfg: dict) -> str:
+    """The memory backend that will actually be used, honouring the override."""
+    return cfg.get("memory_backend") or detect_vector_backend()
 
 
 class ModelRouter:

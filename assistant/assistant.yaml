@@ -48,6 +48,12 @@ model: accounts/fireworks/models/gpt-oss-120b
 # Comment out or use --no-memory to disable. Default: assistant_memory.db
 # db: assistant_memory.db
 
+# Memory backend override. Auto-detects by default (chromadb → sqlite-vec →
+# lite). Set to "lite" to force keyword-only FTS memory — fully local, no
+# embeddings, no API key — even on a machine where chromadb is installed.
+# Good for small local models that shouldn't depend on a cloud embedder.
+#   memory_backend: lite     # chromadb | sqlite-vec | lite
+
 # SQLite DB for TODOs, journal, scheduled tasks, soul proposals, pending messages.
 data_db: assistant_data.db
 

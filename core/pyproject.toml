@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-core"
+version = "0.1.0"
+description = "Agent identity, orchestration, and binding layer"
+requires-python = ">=3.10"
+dependencies = [
+    "agent-tools",
+    "agent-mind",
+    "agent-patterns",
+    "agent-memory",
+]
+
+[tool.uv.sources]
+agent-tools = { workspace = true }
+agent-mind = { workspace = true }
+agent-patterns = { workspace = true }
+agent-memory = { workspace = true }
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["agent_core*"]

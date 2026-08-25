@@ -1,0 +1,9 @@
+# Core dependencies for Agent Memory System
+llama-cpp-python>=0.3.0
+chromadb>=0.4.0
+numpy>=1.24.0
+pytest>=7.4.0
+pyyaml>=6.0
+
+# Optional but recommended
+rich>=13.0.0  # For better CLI output

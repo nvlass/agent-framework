@@ -1,0 +1,366 @@
+"""Tests for ProgressMonitor.
+
+Run with:
+    cd mind/
+    python -m pytest tests/test_monitor.py -v
+"""
+
+import pytest
+
+from agent_mind.introspection.monitor import (
+    ActionResult, MonitorConfig, ActionRecord, ProgressMonitor,
+)
+from agent_mind.introspection.triggers import TriggerType
+
+
+class TestActionResult:
+
+    def test_values(self):
+        assert ActionResult.PROGRESS.value == "progress"
+        assert ActionResult.NO_CHANGE.value == "no_change"
+        assert ActionResult.FAILURE.value == "failure"
+
+
+class TestMonitorConfig:
+
+    def test_defaults(self):
+        cfg = MonitorConfig()
+        assert cfg.consecutive_failures_threshold == 3
+        assert cfg.no_progress_threshold == 5
+        assert cfg.min_actions_between_reflections == 3
+        assert cfg.max_failures_before_forced_reflect == 10
+        assert cfg.max_history == 100
+
+    def test_custom_values(self):
+        cfg = MonitorConfig(
+            consecutive_failures_threshold=5,
+            no_progress_threshold=10,
+            min_actions_between_reflections=2,
+            max_failures_before_forced_reflect=20,
+            max_history=50,
+        )
+        assert cfg.consecutive_failures_threshold == 5
+        assert cfg.max_history == 50
+
+
+class TestActionRecord:
+
+    def test_creation(self):
+        r = ActionRecord(
+            action="run tests", result="3 failures",
+            classification=ActionResult.FAILURE,
+        )
+        assert r.action == "run tests"
+        assert r.result == "3 failures"
+        assert r.classification == ActionResult.FAILURE
+
+    def test_timestamp_auto_set(self):
+        r = ActionRecord(
+            action="x", result="y", classification=ActionResult.PROGRESS,
+        )
+        assert r.timestamp is not None
+
+    def test_to_dict(self):
+        r = ActionRecord(
+            action="check", result="ok", classification=ActionResult.PROGRESS,
+        )
+        d = r.to_dict()
+        assert d["action"] == "check"
+        assert d["classification"] == "progress"
+        assert "timestamp" in d
+
+
+class TestProgressMonitorInit:
+
+    def test_default_config(self):
+        m = ProgressMonitor()
+        assert m.config.consecutive_failures_threshold == 3
+
+    def test_custom_config(self):
+        cfg = MonitorConfig(consecutive_failures_threshold=7)
+        m = ProgressMonitor(config=cfg)
+        assert m.config.consecutive_failures_threshold == 7
+
+    def test_initial_state(self):
+        m = ProgressMonitor()
+        assert m.consecutive_failures == 0
+        assert m.no_progress_count == 0
+        assert m.actions_since_last_reflection == 0
+        assert m.last_reflection_time is None
+        assert m.history == []
+
+
+class TestRecordAction:
+    """Test record_action counter semantics.
+
+    Implement record_action() in ProgressMonitor to make these pass.
+    """
+
+    def test_record_failure(self):
+        m = ProgressMonitor()
+        m.record_action("test", "failed", ActionResult.FAILURE)
+        assert m.consecutive_failures == 1
+        assert m.no_progress_count == 1
+
+    def test_record_no_change(self):
+        m = ProgressMonitor()
+        m.record_action("test", "nothing happened", ActionResult.NO_CHANGE)
+        assert m.consecutive_failures == 0
+        assert m.no_progress_count == 1
+
+    def test_record_progress(self):
+        m = ProgressMonitor()
+        m.record_action("test", "failed", ActionResult.FAILURE)
+        m.record_action("fix", "worked", ActionResult.PROGRESS)
+        assert m.consecutive_failures == 0
+        assert m.no_progress_count == 0
+
+    def test_history_grows(self):
+        m = ProgressMonitor()
+        m.record_action("a", "r", ActionResult.PROGRESS)
+        m.record_action("b", "r", ActionResult.PROGRESS)
+        assert len(m.history) == 2
+
+    def test_history_bounded(self):
+        cfg = MonitorConfig(max_history=3)
+        m = ProgressMonitor(config=cfg)
+        for i in range(5):
+            m.record_action(f"action-{i}", "r", ActionResult.PROGRESS)
+        assert len(m.history) == 3
+
+    def test_actions_since_reflection_increments(self):
+        m = ProgressMonitor()
+        m.record_action("a", "r", ActionResult.PROGRESS)
+        m.record_action("b", "r", ActionResult.FAILURE)
+        assert m.actions_since_last_reflection == 2
+
+    def test_failure_then_no_change_resets_consecutive(self):
+        m = ProgressMonitor()
+        m.record_action("a", "r", ActionResult.FAILURE)
+        m.record_action("b", "r", ActionResult.NO_CHANGE)
+        assert m.consecutive_failures == 0
+        assert m.no_progress_count == 2
+
+    def test_failure_then_progress_resets_both(self):
+        m = ProgressMonitor()
+        m.record_action("a", "r", ActionResult.FAILURE)
+        m.record_action("b", "r", ActionResult.PROGRESS)
+        assert m.consecutive_failures == 0
+        assert m.no_progress_count == 0
+
+    def test_mixed_sequence(self):
+        """F, F, NC, F, P → consecutive=0, no_progress=0."""
+        m = ProgressMonitor()
+        m.record_action("a", "r", ActionResult.FAILURE)      # c=1, np=1
+        m.record_action("b", "r", ActionResult.FAILURE)      # c=2, np=2
+        m.record_action("c", "r", ActionResult.NO_CHANGE)    # c=0, np=3
+        m.record_action("d", "r", ActionResult.FAILURE)      # c=1, np=4
+        m.record_action("e", "r", ActionResult.PROGRESS)     # c=0, np=0
+        assert m.consecutive_failures == 0
+        assert m.no_progress_count == 0
+        assert m.actions_since_last_reflection == 5
+
+
+class TestShouldReflect:
+    """Test should_reflect() trigger logic.
+
+    Implement should_reflect() in ProgressMonitor to make these pass.
+    """
+
+    def test_no_actions_returns_none(self):
+        m = ProgressMonitor()
+        assert m.should_reflect() is None
+
+    def test_below_threshold_returns_none(self):
+        m = ProgressMonitor()
+        m.record_action("a", "r", ActionResult.FAILURE)
+        m.record_action("b", "r", ActionResult.FAILURE)
+        # 2 failures, threshold is 3
+        assert m.should_reflect() is None
+
+    def test_consecutive_failures_triggers(self):
+        m = ProgressMonitor()
+        for i in range(3):
+            m.record_action(f"fail-{i}", "r", ActionResult.FAILURE)
+        trigger = m.should_reflect()
+        assert trigger is not None
+        assert trigger.type == TriggerType.EVENT
+
+    def test_consecutive_failures_reason(self):
+        m = ProgressMonitor()
+        for i in range(3):
+            m.record_action(f"fail-{i}", "r", ActionResult.FAILURE)
+        trigger = m.should_reflect()
+        assert "3" in trigger.reason
+        assert "consecutive" in trigger.reason
+
+    def test_no_progress_triggers(self):
+        m = ProgressMonitor()
+        for i in range(5):
+            m.record_action(f"noop-{i}", "r", ActionResult.NO_CHANGE)
+        trigger = m.should_reflect()
+        assert trigger is not None
+
+    def test_no_progress_reason(self):
+        m = ProgressMonitor()
+        for i in range(5):
+            m.record_action(f"noop-{i}", "r", ActionResult.NO_CHANGE)
+        trigger = m.should_reflect()
+        assert "5" in trigger.reason
+        assert "no progress" in trigger.reason
+
+    def test_min_actions_guardrail(self):
+        """Right after reflection, don't trigger even with failures."""
+        m = ProgressMonitor()
+        # Record enough to trigger, then reflect
+        for i in range(3):
+            m.record_action(f"fail-{i}", "r", ActionResult.FAILURE)
+        m.mark_reflected()
+        # Now 2 quick failures — not enough actions since reflection (min=3)
+        m.record_action("fail-a", "r", ActionResult.FAILURE)
+        m.record_action("fail-b", "r", ActionResult.FAILURE)
+        assert m.should_reflect() is None
+
+    def test_min_actions_allows_after_enough(self):
+        """After min_actions, triggers work again."""
+        m = ProgressMonitor()
+        m.mark_reflected()
+        m.record_action("fail-1", "r", ActionResult.FAILURE)
+        m.record_action("fail-2", "r", ActionResult.FAILURE)
+        m.record_action("fail-3", "r", ActionResult.FAILURE)
+        # 3 actions since reflection (= min), and 3 consecutive failures
+        trigger = m.should_reflect()
+        assert trigger is not None
+
+    def test_forced_reflection_overrides_min_actions(self):
+        """max_failures forces reflection even right after reflecting."""
+        cfg = MonitorConfig(max_failures_before_forced_reflect=4)
+        m = ProgressMonitor(config=cfg)
+        m.mark_reflected()
+        # 4 failures in a row, but only 4 actions since reflection
+        # (min_actions=3, so normal trigger would fire, but let's test forced)
+        # Use min_actions=10 to really test the override
+        cfg2 = MonitorConfig(
+            max_failures_before_forced_reflect=4,
+            min_actions_between_reflections=10,
+        )
+        m2 = ProgressMonitor(config=cfg2)
+        m2.mark_reflected()
+        for i in range(4):
+            m2.record_action(f"fail-{i}", "r", ActionResult.FAILURE)
+        # Only 4 actions (min=10), but forced at 4 failures
+        trigger = m2.should_reflect()
+        assert trigger is not None
+        assert "forced" in trigger.reason
+
+    def test_custom_thresholds(self):
+        cfg = MonitorConfig(consecutive_failures_threshold=1)
+        m = ProgressMonitor(config=cfg)
+        m.record_action("fail", "r", ActionResult.FAILURE)
+        trigger = m.should_reflect()
+        assert trigger is not None
+
+    def test_progress_resets_prevents_trigger(self):
+        """F, F, P, F → consecutive=1, no trigger."""
+        m = ProgressMonitor()
+        m.record_action("a", "r", ActionResult.FAILURE)
+        m.record_action("b", "r", ActionResult.FAILURE)
+        m.record_action("c", "r", ActionResult.PROGRESS)
+        m.record_action("d", "r", ActionResult.FAILURE)
+        assert m.should_reflect() is None
+
+    def test_returns_event_type(self):
+        m = ProgressMonitor()
+        for i in range(3):
+            m.record_action(f"fail-{i}", "r", ActionResult.FAILURE)
+        trigger = m.should_reflect()
+        assert trigger.type == TriggerType.EVENT
+
+    def test_consecutive_checked_before_no_progress(self):
+        """When both thresholds met, consecutive fires first."""
+        cfg = MonitorConfig(
+            consecutive_failures_threshold=3,
+            no_progress_threshold=3,
+        )
+        m = ProgressMonitor(config=cfg)
+        for i in range(3):
+            m.record_action(f"fail-{i}", "r", ActionResult.FAILURE)
+        # Both thresholds met (3 consecutive, 3 no-progress)
+        trigger = m.should_reflect()
+        assert "consecutive" in trigger.reason
+
+
+class TestMarkReflected:
+
+    def test_resets_counters(self):
+        m = ProgressMonitor()
+        for i in range(3):
+            m.record_action(f"fail-{i}", "r", ActionResult.FAILURE)
+        m.mark_reflected()
+        assert m.consecutive_failures == 0
+        assert m.no_progress_count == 0
+        assert m.actions_since_last_reflection == 0
+
+    def test_sets_reflection_time(self):
+        m = ProgressMonitor()
+        assert m.last_reflection_time is None
+        m.mark_reflected()
+        assert m.last_reflection_time is not None
+
+    def test_does_not_clear_history(self):
+        m = ProgressMonitor()
+        m.record_action("a", "r", ActionResult.FAILURE)
+        m.mark_reflected()
+        assert len(m.history) == 1
+
+    def test_allows_new_trigger_cycle(self):
+        m = ProgressMonitor()
+        for i in range(3):
+            m.record_action(f"fail-{i}", "r", ActionResult.FAILURE)
+        assert m.should_reflect() is not None
+        m.mark_reflected()
+        assert m.should_reflect() is None
+        # New cycle of failures
+        for i in range(3):
+            m.record_action(f"fail2-{i}", "r", ActionResult.FAILURE)
+        assert m.should_reflect() is not None
+
+
+class TestReset:
+
+    def test_clears_everything(self):
+        m = ProgressMonitor()
+        for i in range(3):
+            m.record_action(f"fail-{i}", "r", ActionResult.FAILURE)
+        m.mark_reflected()
+        m.record_action("a", "r", ActionResult.FAILURE)
+        m.reset()
+        assert m.consecutive_failures == 0
+        assert m.no_progress_count == 0
+        assert m.actions_since_last_reflection == 0
+        assert m.last_reflection_time is None
+        assert m.history == []
+
+    def test_after_reset_no_trigger(self):
+        m = ProgressMonitor()
+        for i in range(3):
+            m.record_action(f"fail-{i}", "r", ActionResult.FAILURE)
+        m.reset()
+        assert m.should_reflect() is None
+
+
+class TestHistoryProperty:
+
+    def test_returns_copy(self):
+        m = ProgressMonitor()
+        m.record_action("a", "r", ActionResult.PROGRESS)
+        h = m.history
+        h.clear()
+        assert len(m.history) == 1  # internal state unaffected
+
+    def test_order_oldest_first(self):
+        m = ProgressMonitor()
+        m.record_action("first", "r", ActionResult.PROGRESS)
+        m.record_action("second", "r", ActionResult.PROGRESS)
+        assert m.history[0].action == "first"
+        assert m.history[1].action == "second"

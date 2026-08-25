@@ -1,0 +1,261 @@
+# Personal assistant configuration
+# All keys are optional — omit any to use the built-in default.
+# CLI flags (--model, --db, etc.) override values set here.
+
+# ---------------------------------------------------------------------------
+# Identity
+# ---------------------------------------------------------------------------
+
+# Display name shown in the TUI header and CLI banner.
+# If omitted, defaults to "Assistant".
+# name: My Agent
+
+# Path to the soul file (immutable layer).
+# Priority: --soul flag > ./soul.txt (cwd) > SCRIPT_DIR/soul.txt > built-in default.
+soul: ./soul.txt
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+# Default model — used for all tasks unless overridden below.
+model: accounts/fireworks/models/gpt-oss-120b
+
+# Per-task model overrides.
+# Any task not listed here falls back to the default model above.
+# Provider is auto-detected from the model ID:
+#   - IDs starting with "claude" → AnthropicLLM (needs ANTHROPIC_API_KEY)
+#   - IDs starting with "grok"   → OpenAILLM @ api.x.ai (needs XAI_API_KEY)
+#   - Everything else            → FireworksLLM (needs FIREWORKS_API_KEY)
+# Supported tasks: conversation, curiosity, inner_voice, compaction, nudge
+# (reflection is reserved for future memory-LLM routing)
+#
+# models:
+#   conversation: accounts/fireworks/models/gpt-oss-120b   # main chat loop
+#   curiosity:    accounts/fireworks/models/deepseek-v3p2  # background research
+#   inner_voice:  accounts/fireworks/models/gpt-oss-120b   # significance filter
+#   compaction:   claude-sonnet-4-6                        # context summarisation
+
+# ---------------------------------------------------------------------------
+# Persistence
+# ---------------------------------------------------------------------------
+
+# SQLite DB for long-term memory (episodic store + vector search).
+# Comment out or use --no-memory to disable. Default: assistant_memory.db
+# db: assistant_memory.db
+
+# SQLite DB for TODOs, journal, scheduled tasks, soul proposals, pending messages.
+data_db: assistant_data.db
+
+# ---------------------------------------------------------------------------
+# Context
+# ---------------------------------------------------------------------------
+
+# Auto-compact conversation when it exceeds this many characters.
+max_chars: 32000
+
+# ---------------------------------------------------------------------------
+# Session handoff — conversational texture across restarts (disabled by default)
+# ---------------------------------------------------------------------------
+# Writes a short first-person "note to future self" at shutdown and injects it
+# at the next startup, so a restart resumes with the *texture* of where things
+# left off (tone, open threads) instead of cold. A separate layer from episodic
+# memory (facts) and the soul (identity) — it is never written to the memory
+# store. Stored as a human-legible markdown append-log you can read/hand-edit;
+# the growing log doubles as a dated diary of the agent's evolution.
+#
+# Leave unset if the agent already has a soul-level handoff protocol.
+#
+# session_handoff: true
+# handoff_file: ada_handoff.md     # default: <data_db dir>/<name>_handoff.md
+# handoff_max_entries: 20          # log soft-cap (older entries trimmed on write)
+# handoff_prompt: |                # override note-synthesis instructions (own voice)
+#   Write to your future self, in your own voice: where we left off, the mood,
+#   and any open threads. 3-5 sentences — the feel of it, not a transcript.
+
+# ---------------------------------------------------------------------------
+# Background threads
+# ---------------------------------------------------------------------------
+
+# Reflection: how often (seconds) to call memory.reflect_on_recent().
+# Requires memory (db) to be enabled.
+reflect_interval: 3600
+
+# Curiosity: how often (seconds) to run a background research cycle.
+# 0 = off. Typical values: 1800 (30 min), 3600 (1 hr).
+curiosity_interval: 0
+
+# Nudge: how often (seconds) to check whether the agent is behaving
+# consistently with its own ## Self-monitoring soul section.
+# 0 = off (default). Requires a ## Self-monitoring section in the soul —
+# if absent, the monitor starts but immediately disables itself.
+# Typical values: 900 (15 min), 1800 (30 min).
+nudge_interval: 0
+
+# L1 auto-extraction: after every N idle turns, run a cheap LLM pass that pulls
+# atomic facts from the recent conversation and stores them in long-term memory.
+# Facts survive compaction and are retrievable via recall. Requires memory (db).
+# 0 = off (default). Typical values: 5 (frequent) to 10 (light).
+# extraction_interval: 5
+
+# Post-turn critic: after each idle turn (no tool use), run a quick LLM check
+# for soul deference. If flagged, injects a self-check note into the next turn.
+# Requires a ## Self-monitoring section in the soul (same as nudge_interval).
+# Complements nudge_interval: nudge catches cross-turn patterns (periodic),
+# critic catches single-turn deference (immediate).
+# critic_pass: false
+
+# ---------------------------------------------------------------------------
+# Work cycle — autonomous ReAct sessions (disabled by default)
+# ---------------------------------------------------------------------------
+# Unlike curiosity (fixed search→synthesize→journal pipeline), each work cycle
+# picks a goal — a pending TODO, a research agenda topic, a soul interest, or
+# a dream/replay pass (find connections between two unrelated memories) —
+# and runs a real reason→act→observe loop over the assistant's tools: the
+# agent decides which tools to use and when it's done. Outcomes are journaled
+# and surfaced as background notes. In --daemon mode, scheduled task prompts
+# are also executed through the work cycle.
+# Excluded from autonomous use: compact_context, decide_soul_proposal.
+#
+# work_cycle:
+#   interval: 3600        # seconds between cycles (0/absent = off)
+#   max_iterations: 8     # max reason→act steps per cycle
+
+# ---------------------------------------------------------------------------
+# Curiosity — question formulation
+# ---------------------------------------------------------------------------
+# Controls how the curiosity engine generates search queries each cycle.
+# All keys are optional; omit the entire section to use defaults.
+#
+# curiosity_formulation:
+#
+#   # LLM temperature for question formulation. Higher = more varied questions.
+#   temperature: 0.85
+#
+#   # Probability of omitting prior journal findings entirely (forces fresh reasoning).
+#   journal_dropout: 0.20
+#
+#   # Probability of injecting a finding from a *different* topic as a creative seed.
+#   cross_topic_seed_prob: 0.25
+#
+#   # Probability of the "bravery" mode: minimal prompt, model fills the void.
+#   bravery_prob: 0.15
+#
+#   # Probability of the "go-crazy" meta-prompt: model writes its own prompt first.
+#   # Should be <= bravery_prob.
+#   go_crazy_prob: 0.05
+#
+#   # Disable bravery and go-crazy entirely — always use structured formulation.
+#   structured_only: false
+#
+#   # Relative likelihood of each reasoning strategy in structured mode.
+#   # Higher = more likely to be chosen. Values are weights, not probabilities.
+#   strategy_weights:
+#     deepen:      1.0   # pursue the most uncertain thread in prior findings
+#     challenge:   0.8   # ask something that could falsify a prior finding
+#     lateral:     0.6   # connect to a different domain
+#     speculative: 0.3   # ask at the edge of what's searchable
+#     fresh:       0.2   # ignore everything, ask from first principles
+
+# ---------------------------------------------------------------------------
+# File tools — sandboxed read/write (disabled by default)
+# ---------------------------------------------------------------------------
+# Enables write_file, read_file, and list_files tools.
+# The agent can only access paths inside work_dir — path traversal is blocked.
+# Relative paths inside work_dir are fine (e.g. "reports/lua.md").
+# Absolute paths and ../escapes are rejected.
+#
+# work_dir: ~/agent_work
+
+# ---------------------------------------------------------------------------
+# Sandbox — Python code execution (DANGEROUS, disabled by default)
+# ---------------------------------------------------------------------------
+# Enables the python_exec tool. The agent can write and run arbitrary Python.
+# Strongly recommended: install firejail and create a dedicated unix user first.
+# See SETUP.md → Sandbox section for step-by-step instructions.
+#
+# sandbox:
+#   work_dir: ~/agent_work       # Only directory readable/writable inside the sandbox
+#   timeout: 120                 # Max execution time per call (seconds)
+#   backend: auto                # bwrap (recommended) | firejail | auto | none
+#   unix_user:                   # Run as this user (leave blank if agent already runs as them)
+#   python: python3              # Python executable — use venv path e.g. /home/agent_smith/venv/bin/python
+#   firejail_path:               # Full path if firejail is not on PATH, e.g. /opt/firejail/bin/firejail
+
+# ---------------------------------------------------------------------------
+# Mail — jailed outbound email (disabled by default)
+# ---------------------------------------------------------------------------
+# Enables the send_email tool. The agent addresses recipients by alias only —
+# the alias → address map lives here, so it can never mail an arbitrary
+# address. Delivery uses the local sendmail binary (postfix etc.).
+#
+# mail:
+#   recipients:                      # alias → address; the agent only sees aliases
+#     me: you@example.com
+#   from: assistant@localhost        # From: header
+#   subject_prefix: "[assistant]"    # optional, prepended to every subject
+#   max_per_day: 20                  # hard daily send cap (default 20)
+#   sendmail_path: /usr/sbin/sendmail
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+# Log level for console output. Rolling log file always captures DEBUG.
+# Options: DEBUG, INFO, WARNING, ERROR
+log_level: WARNING
+
+# ---------------------------------------------------------------------------
+# Mailbox — inter-agent async messaging via shared SQLite
+# ---------------------------------------------------------------------------
+# Required for send_message / check_inbox / reply_to_message tools.
+# Both `name` and `mailbox_db` must be set.
+# `mailbox_db` may be relative (resolved against this config file) or absolute.
+# Use an absolute path so multiple agents on the same machine share the same DB.
+#
+# name: agent_smith                         # This agent's identity in the message bus
+# mailbox_db: /shared/agent_mailbox.db      # Shared across all agents
+
+# ---------------------------------------------------------------------------
+# Spawn roles — specialist sub-agents this agent can delegate to
+# ---------------------------------------------------------------------------
+# Uncomment and define roles to enable the spawn_agent tool.
+# Each role gets only the tools listed under its `tools:` key.
+# Dangerous tools (python_exec, shell) are never inherited — declare explicitly.
+# `model:` is optional; omits to inherit the parent's model.
+#
+# spawn_roles:
+#   researcher:
+#     soul: souls/researcher.txt        # relative to this config file, or absolute
+#     tools: [web_search, fetch_readable, save_note]
+#   critic:
+#     soul: souls/critic.txt
+#     tools: []                         # pure reasoning, no tools needed
+#   analyst:
+#     soul: souls/analyst.txt
+#     tools: [web_search, fetch_readable]
+#     model: accounts/fireworks/models/deepseek-v3p2  # optional LLM override
+
+# ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
+# All tool groups are enabled by default. Set a key to false to disable.
+# Omit the entire section to enable everything.
+#
+# tools:
+#   web_search:     true   # DuckDuckGo search (requires: pip install ddgs)
+#   fetch_readable: true   # Fetch URLs as readable text (requires: pip install html2text)
+#   digest:         true   # Query-focused summary of a URL/long text (map-reduce);
+#                          #   folds via the compaction-task model, raw never hits the buffer
+
+#   arxiv:          true   # arXiv paper search (no extra deps)
+#   memory:         true   # save_note + recall (requires db above)
+#   todos:          true   # todo_add/list/done/note
+#   journal:        true   # journal_add/read/search
+#   scheduler:      true   # schedule_task/list/cancel
+#   research:       true   # research_focus/status/close (curiosity agenda)
+#   soul:           true   # propose/list/decide soul proposals
+#   inner_voice:    true   # list/dismiss/queue pending messages
+#   skills:         true   # list_skills/invoke_skill/propose_skill
+#   spawn:          true   # spawn_agent (requires spawn_roles above)
+#   mail:           true   # send_email (requires mail: section above)

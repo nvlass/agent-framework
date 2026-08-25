@@ -1,0 +1,23 @@
+[Unit]
+Description=llama.cpp inference server
+After=network.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=%h/bin/llama.cpp
+
+ExecStart=%h/bin/llama.cpp/build/bin/llama-server \
+    -m %h/models/qwen2.5-7b-instruct-q5_k_m.gguf \
+    --port 7788 \
+    --ctx-size 8192 \
+    --threads 4
+
+Restart=on-failure
+RestartSec=5
+
+# Keep memory usage predictable
+Environment=LLAMA_CACHE=%h/.cache/llama.cpp
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-assistant"
+version = "0.1.0"
+description = "Personal assistant built on the agent framework"
+requires-python = ">=3.10"
+dependencies = [
+    "agent-core",
+    "agent-tools",
+    "agent-mind",
+    "agent-patterns",
+    "pyyaml>=6.0",
+]
+
+[tool.uv.sources]
+agent-core = { workspace = true }
+agent-tools = { workspace = true }
+agent-memory = { workspace = true }
+agent-mind = { workspace = true }
+agent-patterns = { workspace = true }
+
+[project.optional-dependencies]
+memory = ["agent-memory"]
+tui = ["textual>=0.80"]
+
+[project.scripts]
+assistant = "assistant.main:main"
+assistant-tui = "tui:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["assistant*"]

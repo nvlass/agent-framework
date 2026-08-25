@@ -1,0 +1,193 @@
+"""
+Progress monitor — tracks recent actions and detects stuck states.
+
+The ProgressMonitor is an in-memory, session-scoped tracker. It records
+action outcomes and checks heuristic triggers to decide when reflection
+is needed. It does NOT call LLMs or interact with agent-memory.
+
+Thresholds are configurable via MonitorConfig. The initial values are
+fixed heuristics, designed to become learnable (SOUL_LEARNABLE).
+"""
+
+from collections import deque
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any, Optional
+
+from .triggers import ReflectionTrigger, TriggerType
+
+
+class ActionResult(Enum):
+    """Classification of an action's outcome."""
+    PROGRESS = "progress"
+    NO_CHANGE = "no_change"
+    FAILURE = "failure"
+
+
+@dataclass
+class MonitorConfig:
+    """Configuration for ProgressMonitor thresholds.
+
+    Learnable thresholds (can be tuned by the agent with user approval):
+        consecutive_failures_threshold: Failures in a row before suggesting reflection
+        no_progress_threshold: No-change actions before suggesting reflection
+
+    Immutable guardrails (safety bounds, never modified):
+        min_actions_between_reflections: Minimum actions before another reflection
+        max_failures_before_forced_reflect: Must reflect after this many failures
+
+    History:
+        max_history: Maximum action records kept in memory
+    """
+    consecutive_failures_threshold: int = 3
+    no_progress_threshold: int = 5
+    min_actions_between_reflections: int = 3
+    max_failures_before_forced_reflect: int = 10
+    max_history: int = 100
+
+
+@dataclass
+class ActionRecord:
+    """A single recorded action and its outcome."""
+    action: str
+    result: str
+    classification: ActionResult
+    timestamp: datetime = field(default_factory=datetime.now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "action": self.action,
+            "result": self.result,
+            "classification": self.classification.value,
+            "timestamp": self.timestamp.isoformat(),
+        }
+
+
+class ProgressMonitor:
+    """Tracks action outcomes and detects when the agent is stuck.
+
+    Usage:
+        monitor = ProgressMonitor()
+        monitor.record_action("run tests", "3 failures", ActionResult.FAILURE)
+        monitor.record_action("fix bug", "syntax error", ActionResult.FAILURE)
+        monitor.record_action("fix again", "still fails", ActionResult.FAILURE)
+
+        trigger = monitor.should_reflect()
+        # ReflectionTrigger(type=EVENT, reason="3 consecutive failures")
+
+        monitor.mark_reflected()
+        # counters reset, ready for next cycle
+    """
+
+    def __init__(self, config: Optional[MonitorConfig] = None):
+        self._config = config or MonitorConfig()
+        self._history: deque[ActionRecord] = deque(maxlen=self._config.max_history)
+        self._consecutive_failures: int = 0
+        self._no_progress_count: int = 0
+        self._actions_since_last_reflection: int = 0
+        self._total_failures_since_reflect: int = 0
+        self._last_reflection_time: Optional[datetime] = None
+
+    @property
+    def config(self) -> MonitorConfig:
+        return self._config
+
+    @property
+    def history(self) -> list[ActionRecord]:
+        """Recent action history (oldest first). Returns a copy."""
+        return list(self._history)
+
+    @property
+    def consecutive_failures(self) -> int:
+        return self._consecutive_failures
+
+    @property
+    def no_progress_count(self) -> int:
+        return self._no_progress_count
+
+    @property
+    def actions_since_last_reflection(self) -> int:
+        return self._actions_since_last_reflection
+
+    @property
+    def last_reflection_time(self) -> Optional[datetime]:
+        return self._last_reflection_time
+
+    def record_action(self, action: str, result: str,
+                      classification: ActionResult) -> None:
+        """Record an action and its outcome. Updates all counters.
+
+        Counter semantics:
+        - FAILURE: increments consecutive_failures, no_progress, total_failures
+        - NO_CHANGE: resets consecutive_failures (streak broken), increments no_progress
+        - PROGRESS: resets both consecutive_failures and no_progress
+        """
+        record = ActionRecord(action=action, result=result, classification=classification)
+        self._history.append(record)
+        self._actions_since_last_reflection += 1
+
+        if classification == ActionResult.FAILURE:
+            self._consecutive_failures += 1
+            self._no_progress_count += 1
+            self._total_failures_since_reflect += 1
+        elif classification == ActionResult.NO_CHANGE:
+            self._consecutive_failures = 0
+            self._no_progress_count += 1
+        elif classification == ActionResult.PROGRESS:
+            self._consecutive_failures = 0
+            self._no_progress_count = 0
+
+    def should_reflect(self) -> Optional[ReflectionTrigger]:
+        """Check if reflection should be triggered.
+
+        Returns a ReflectionTrigger if reflection is warranted, None otherwise.
+
+        Trigger priority (checked in order):
+        1. Forced: total failures since reflect >= max_failures (overrides min-actions)
+        2. Guardrail: if actions_since_reflection < min_actions → None
+        3. Consecutive failures >= threshold → trigger
+        4. No-progress count >= threshold → trigger
+
+        """
+        cfg = self._config
+
+        if self._total_failures_since_reflect >= cfg.max_failures_before_forced_reflect:
+            return ReflectionTrigger(
+                type=TriggerType.EVENT,
+                reason=f"{self._total_failures_since_reflect} failures since last reflection (forced at {cfg.max_failures_before_forced_reflect})",
+            )
+
+        if self._actions_since_last_reflection < cfg.min_actions_between_reflections:
+            return None
+
+        if self._consecutive_failures >= cfg.consecutive_failures_threshold:
+            return ReflectionTrigger(
+                type=TriggerType.EVENT,
+                reason=f"{self._consecutive_failures} consecutive failures",
+            )
+
+        if self._no_progress_count >= cfg.no_progress_threshold:
+            return ReflectionTrigger(
+                type=TriggerType.EVENT,
+                reason=f"{self._no_progress_count} actions with no progress",
+            )
+
+        return None
+
+    def mark_reflected(self) -> None:
+        """Mark that reflection has occurred. Resets trigger counters."""
+        self._consecutive_failures = 0
+        self._no_progress_count = 0
+        self._actions_since_last_reflection = 0
+        self._total_failures_since_reflect = 0
+        self._last_reflection_time = datetime.now()
+
+    def reset(self) -> None:
+        """Clear all state (history and counters)."""
+        self._history.clear()
+        self._consecutive_failures = 0
+        self._no_progress_count = 0
+        self._actions_since_last_reflection = 0
+        self._total_failures_since_reflect = 0
+        self._last_reflection_time = None

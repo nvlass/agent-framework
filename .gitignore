@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
+
+# Memory system data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+memory_vectors/
+*.gguf
+
+# Agent runtime data / personal content — never publish
+*.log
+*_transcript.md
+*transcript.md
+*_handoff.md
+adadb/
+# Personal agent souls live outside the repo; force-add if you mean to share one
+souls/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test outputs
+.pytest_cache/
+htmlcov/
+.coverage

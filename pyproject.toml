@@ -1,0 +1,9 @@
+[tool.uv.workspace]
+members = [
+    "mem",
+    "tools",
+    "mind",
+    "patterns",
+    "core",
+    "assistant",
+]

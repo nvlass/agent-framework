@@ -38,6 +38,8 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
+from agent_core.mailbox import normalize_agent_name
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,7 +82,7 @@ class ConversationBus:
     """
 
     def __init__(self, db_path: str | Path, agent_name: str) -> None:
-        self._name = agent_name
+        self._name = normalize_agent_name(agent_name)
         self._lock = threading.Lock()
         # isolation_level=None → autocommit; we manage BEGIN IMMEDIATE ourselves
         # so the read-modify-write in reply() is atomic across processes.
@@ -120,6 +122,7 @@ class ConversationBus:
 
         Returns the conversation dict. Raises ConversationError on bad input.
         """
+        peer = normalize_agent_name(peer)
         if peer == self._name:
             raise ConversationError("Cannot open a conversation with yourself.")
         if not (message or "").strip():

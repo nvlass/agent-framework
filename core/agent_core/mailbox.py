@@ -31,10 +31,24 @@ work too (e.g. spawned child agents).
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def normalize_agent_name(name: str) -> str:
+    """Canonicalise an agent name for routing.
+
+    Agents are addressed by other agents — usually LLMs, which write natural
+    names like "Agent Smith" while the configured identifier is "agent_smith".
+    Exact-string matching silently fails on that (a real bug: a message to
+    "Agent Smith" never reaches "agent_smith"). Normalising both the sender's
+    target and each agent's own name to lowercase with separators collapsed to
+    underscores makes them resolve to the same identifier.
+    """
+    return re.sub(r"[\s\-]+", "_", (name or "").strip().lower())
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS mailbox (
@@ -67,7 +81,7 @@ class AgentMailbox:
     """
 
     def __init__(self, db_path: str | Path, agent_name: str) -> None:
-        self._name = agent_name
+        self._name = normalize_agent_name(agent_name)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -110,7 +124,7 @@ class AgentMailbox:
             cur = self._conn.execute(
                 "INSERT INTO mailbox (from_agent, to_agent, topic, message, reply_to) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (self._name, to, topic, message, reply_to),
+                (self._name, normalize_agent_name(to), topic, message, reply_to),
             )
             self._conn.commit()
             return cur.lastrowid

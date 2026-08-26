@@ -728,6 +728,25 @@ python -m pytest tests/ -v  # 213 tests passing
 
 ## Backlog
 
+### Persona-collapse detector — verbatim self-repetition (noted 2026-08-26)
+
+Observed in the Ada↔Pipin "Voice of Discordia" experiment
+(`experiments/pipin-discordia-collapse.md`): when a small model's persona
+collapses under contradiction, it stops generating novel output and **replays a
+near-identical previous turn verbatim**. That verbatim/near-verbatim loop is a
+reliable "the persona has failed / the model is stuck looping its safest output"
+signal.
+
+Cheap to detect: cosine similarity (or even normalized-string equality) between
+an agent's consecutive **same-role** turns; above a threshold → flag. It's the
+conversational analog of the reflection-dedup problem (see below). Uses could
+include: surface a background note ("you are repeating yourself — break the
+loop"), abandon a stalled conversation, or downweight a persona that keeps
+collapsing. Detection is model-agnostic but most useful for small local models
+whose contradiction budget is small.
+
+---
+
 ### Session handoff — conversational texture across restarts ✅ Complete (2026-08-19)
 
 A third continuity layer beside memory (facts) and soul (identity): the

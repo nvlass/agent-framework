@@ -14,6 +14,7 @@ never approve its own proposals).
 import json
 import logging
 import queue
+import random
 import threading
 import time
 
@@ -162,6 +163,7 @@ class WorkCycle:
         # Unified-queue path (opt-in; the default rotation loop is unchanged).
         self._use_queue = use_queue
         self._sched_seq = 0  # unique keys for scheduled items (never deduped)
+        self._rng = random.Random()  # background weighted-lottery draws
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -219,12 +221,13 @@ class WorkCycle:
                     log.exception("Work cycle failed (source=%s)", source)
 
     # ------------------------------------------------------------------
-    # Unified-queue loop (opt-in via use_queue). Same cadence as the rotation
-    # (conversations/scheduled every tick, background interval-paced) but routed
-    # through one two-tier queue: urgent strict-priority, background weighted
-    # lottery. Background items are lightweight TICKETS (kind only) generated
-    # lazily at dispatch, so a side-effectful generator only runs when its kind
-    # is actually chosen — preserving cursor/agenda semantics. See
+    # Unified-queue loop (opt-in via use_queue). Same cadence as the rotation:
+    # urgent work (scheduled + conversation your-turn) is routed through the
+    # WorkQueue and served every ~5s tick, strict-priority + deduped; background
+    # work (todos/research/interests/dream) runs at most ONCE per interval,
+    # chosen by significance-weighted lottery — matching the rotation's
+    # one-cycle-per-interval pacing (not a burst). Only the chosen kind's
+    # generator is called, preserving its cursor/agenda state. See
     # docs/work-queue-design.md.
     # ------------------------------------------------------------------
 
@@ -233,19 +236,19 @@ class WorkCycle:
 
     def _run_queued(self) -> None:
         from assistant.work_queue import WorkQueue
-        q = WorkQueue()
+        q = WorkQueue()  # urgent tier; background is paced separately, below
         next_bg = time.time() + self._interval
         while not self._stop.is_set():
             self._stop.wait(5)
             if self._stop.is_set():
                 break
             self._enqueue_urgent(q)
-            if time.time() >= next_bg and q.pending()["background"] == 0:
-                self._enqueue_background(q)
-                next_bg = time.time() + self._interval
             item = q.get()
             if item is not None:
-                self._dispatch_item(q, item)
+                self._dispatch_item(q, item)              # urgent, every tick
+            elif time.time() >= next_bg:
+                self._run_one_background()                 # ONE per interval
+                next_bg = time.time() + self._interval
 
     def _enqueue_urgent(self, q) -> None:
         """Drain scheduled prompts and pending conversation turns as urgent items."""
@@ -268,21 +271,37 @@ class WorkCycle:
                                           key=f"conversation:{c['id']}"),
                                  priority=self._URGENT_PRIORITY["conversation"])
 
-    def _enqueue_background(self, q) -> None:
-        """Enqueue one lightweight ticket per available background source."""
-        from assistant.work_queue import WorkItem
+    def _run_one_background(self) -> None:
+        """Run ONE background source, chosen by weighted lottery (interval-paced).
+
+        Matches the rotation's one-autonomous-cycle-per-interval cadence, but
+        selects by significance weight instead of round-robin. Only ONE runs per
+        interval — no draining of all sources in a burst. A generator is only
+        called for the kind actually chosen, preserving its cursor/agenda state.
+        """
         available = {
             "todos": self._todos is not None,
             "research": self._agenda is not None,
             "interests": True,
             "dream": self._memory is not None,
         }
+        kinds, weights = [], []
         for kind, weight in self._BACKGROUND_WEIGHTS.items():
             if available.get(kind):
-                q.put_background(WorkItem(kind, key=kind), weight=weight)
+                kinds.append(kind)
+                weights.append(weight)
+        if not kinds:
+            return
+        kind = self._rng.choices(kinds, weights=weights, k=1)[0]
+        goal = getattr(self, f"_goal_from_{kind}")()
+        if goal:
+            try:
+                self.run_cycle(goal, kind)
+            except Exception:
+                log.exception("Queued background cycle failed (kind=%s)", kind)
 
     def _dispatch_item(self, q, item) -> None:
-        """Generate the goal for a selected item (lazily for background) and run it."""
+        """Run a selected urgent item (scheduled or conversation). Releases its key."""
         key = item.dedup_key()
         try:
             if item.kind == "scheduled":
@@ -291,10 +310,6 @@ class WorkCycle:
                 goal = self._conversation_goal_by_id(item.payload)
                 if goal:
                     self.run_cycle(goal, "conversation")
-            else:  # background: generate now, so only the chosen kind's generator fires
-                goal = getattr(self, f"_goal_from_{item.kind}")()
-                if goal:
-                    self.run_cycle(goal, item.kind)
         except Exception:
             log.exception("Queued work cycle failed (kind=%s)", item.kind)
         finally:

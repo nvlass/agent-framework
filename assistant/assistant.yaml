@@ -148,6 +148,11 @@ nudge_interval: 0
 # work_cycle:
 #   interval: 3600        # seconds between cycles (0/absent = off)
 #   max_iterations: 8     # max reason→act steps per cycle
+#   use_queue: false      # EXPERIMENTAL: route work through the unified two-tier
+#                         #   queue (urgent strict-priority + background weighted
+#                         #   lottery) instead of the rotation loop. Default off;
+#                         #   same cadence, different selection. See
+#                         #   docs/work-queue-design.md.
 
 # ---------------------------------------------------------------------------
 # Curiosity — question formulation

@@ -122,6 +122,7 @@ class WorkCycle:
         interval_seconds: int = 3600,
         max_iterations: int = 8,
         on_cycle=None,
+        use_queue: bool = False,
     ) -> None:
         """
         Args:
@@ -158,6 +159,9 @@ class WorkCycle:
         self._thread: threading.Thread | None = None
         self._source_cursor = 0
         self._interest_cursor = 0
+        # Unified-queue path (opt-in; the default rotation loop is unchanged).
+        self._use_queue = use_queue
+        self._sched_seq = 0  # unique keys for scheduled items (never deduped)
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -179,6 +183,12 @@ class WorkCycle:
         self._goal_queue.put(description)
 
     def _run(self) -> None:
+        if self._use_queue:
+            self._run_queued()
+        else:
+            self._run_rotation()
+
+    def _run_rotation(self) -> None:
         next_cycle = time.time() + self._interval
         while not self._stop.is_set():
             self._stop.wait(5)
@@ -209,6 +219,88 @@ class WorkCycle:
                     log.exception("Work cycle failed (source=%s)", source)
 
     # ------------------------------------------------------------------
+    # Unified-queue loop (opt-in via use_queue). Same cadence as the rotation
+    # (conversations/scheduled every tick, background interval-paced) but routed
+    # through one two-tier queue: urgent strict-priority, background weighted
+    # lottery. Background items are lightweight TICKETS (kind only) generated
+    # lazily at dispatch, so a side-effectful generator only runs when its kind
+    # is actually chosen — preserving cursor/agenda semantics. See
+    # docs/work-queue-design.md.
+    # ------------------------------------------------------------------
+
+    _URGENT_PRIORITY = {"scheduled": 20, "conversation": 30}
+    _BACKGROUND_WEIGHTS = {"todos": 3.0, "research": 1.5, "interests": 1.0, "dream": 0.5}
+
+    def _run_queued(self) -> None:
+        from assistant.work_queue import WorkQueue
+        q = WorkQueue()
+        next_bg = time.time() + self._interval
+        while not self._stop.is_set():
+            self._stop.wait(5)
+            if self._stop.is_set():
+                break
+            self._enqueue_urgent(q)
+            if time.time() >= next_bg and q.pending()["background"] == 0:
+                self._enqueue_background(q)
+                next_bg = time.time() + self._interval
+            item = q.get()
+            if item is not None:
+                self._dispatch_item(q, item)
+
+    def _enqueue_urgent(self, q) -> None:
+        """Drain scheduled prompts and pending conversation turns as urgent items."""
+        from assistant.work_queue import WorkItem
+        while True:
+            try:
+                prompt = self._goal_queue.get_nowait()
+            except queue.Empty:
+                break
+            goal = (f"Complete this scheduled task: {prompt}\n"
+                    "Use your tools as needed, then summarize the outcome.")
+            self._sched_seq += 1
+            q.put_urgent(WorkItem("scheduled", payload=goal,
+                                  key=f"scheduled:{self._sched_seq}"),
+                         priority=self._URGENT_PRIORITY["scheduled"])
+        if self._conversations:
+            for c in self._conversations.needs_attention(limit=5):
+                if c["attention"] == "your_turn":
+                    q.put_urgent(WorkItem("conversation", payload=c["id"],
+                                          key=f"conversation:{c['id']}"),
+                                 priority=self._URGENT_PRIORITY["conversation"])
+
+    def _enqueue_background(self, q) -> None:
+        """Enqueue one lightweight ticket per available background source."""
+        from assistant.work_queue import WorkItem
+        available = {
+            "todos": self._todos is not None,
+            "research": self._agenda is not None,
+            "interests": True,
+            "dream": self._memory is not None,
+        }
+        for kind, weight in self._BACKGROUND_WEIGHTS.items():
+            if available.get(kind):
+                q.put_background(WorkItem(kind, key=kind), weight=weight)
+
+    def _dispatch_item(self, q, item) -> None:
+        """Generate the goal for a selected item (lazily for background) and run it."""
+        key = item.dedup_key()
+        try:
+            if item.kind == "scheduled":
+                self.run_cycle(item.payload, "scheduled")
+            elif item.kind == "conversation":
+                goal = self._conversation_goal_by_id(item.payload)
+                if goal:
+                    self.run_cycle(goal, "conversation")
+            else:  # background: generate now, so only the chosen kind's generator fires
+                goal = getattr(self, f"_goal_from_{item.kind}")()
+                if goal:
+                    self.run_cycle(goal, item.kind)
+        except Exception:
+            log.exception("Queued work cycle failed (kind=%s)", item.kind)
+        finally:
+            q.done(key)
+
+    # ------------------------------------------------------------------
     # goal selection
     # ------------------------------------------------------------------
 
@@ -235,7 +327,18 @@ class WorkCycle:
                    if c["attention"] == "your_turn"]
         if not pending:
             return None
-        c = pending[0]
+        return self._conversation_goal(pending[0])
+
+    def _conversation_goal_by_id(self, conversation_id) -> str | None:
+        """Goal for a SPECIFIC conversation (queued path), if it's still our turn."""
+        if not self._conversations:
+            return None
+        for c in self._conversations.needs_attention(limit=10):
+            if c["id"] == conversation_id and c["attention"] == "your_turn":
+                return self._conversation_goal(c)
+        return None  # peer already got a reply, or it closed — nothing to do
+
+    def _conversation_goal(self, c) -> str:
         hist = self._conversations.history(c["id"])
         transcript = "\n".join(
             f"  {t['turn_no']}. {t['from_agent']}: {t['message']}" for t in hist)

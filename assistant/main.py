@@ -345,6 +345,7 @@ def main():
             conversation_bus=conversation_bus,
             interval_seconds=wc_interval,
             max_iterations=int(wc_cfg.get("max_iterations", 8)),
+            use_queue=bool(wc_cfg.get("use_queue", False)),
             on_cycle=lambda source, outcome, summary: (
                 buffer.add_background_note(
                     f"[Work cycle/{source}] {outcome}: {summary[:400]}"),

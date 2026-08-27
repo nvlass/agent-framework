@@ -65,14 +65,34 @@ Not everything belongs in the same ordering discipline:
   todos, research, interests, dream   (weighted random among themselves)
   ```
 
-**Open decisions (need Nikos):**
-1. Is `todos` urgent or background? It's a *commitment* (argues urgent) but has no
-   deadline (argues background, high ticket weight). Leaning: background with a
-   high weight — so chores dominate but never fully starve creativity.
-2. Does a **scheduled task** outrank a **conversation your-turn**? A blocked peer
-   vs. a cron the user set. Leaning: your-turn wins (a live peer is waiting;
-   a schedule can slip a tick).
-3. Default significance weights for the background tier (later `SOUL_LEARNABLE`).
+**Decisions (resolved 2026-08-27, Nikos):**
+
+1. **`todos` → background, high weight.** A commitment, but no deadline — so it
+   competes in the lottery with a heavy ticket (chores dominate, never fully
+   starve creativity).
+2. **Scheduled task preempts conversation your-turn.** (Nikos' call, over the
+   your-turn lean.) So the **urgent tier order** (lower = served first) is:
+
+   | kind | priority |
+   |------|----------|
+   | `user` (live prompt) | 10 |
+   | `scheduled` | 20 |
+   | `conversation` your-turn | 30 |
+   | `mailbox` | 40 |
+
+   *Implication to keep in mind:* a long scheduled task can make a blocked peer
+   wait. Acceptable for now; if it bites, a scheduled task could yield to a
+   your-turn when the peer has been waiting > N.
+
+3. **Background weights: sensible defaults now → config next → `SOUL_LEARNABLE`
+   later.** Starting defaults (config-overridable):
+
+   | kind | weight |
+   |------|--------|
+   | `todos` | 3.0 |
+   | `research` | 1.5 |
+   | `interests` | 1.0 |
+   | `dream` | 0.5 |
 
 ## Idempotency
 

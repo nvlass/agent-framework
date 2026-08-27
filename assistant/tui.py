@@ -160,8 +160,11 @@ class AssistantApp(App):
             self._input_queue.put(text)
 
     def action_quit_app(self) -> None:
-        self._input_queue.put(None)  # signal worker to stop
-        self.exit()
+        # Signal the worker to stop; it exits the app itself once its shutdown
+        # (handoff note + exit-compaction) has finished. Calling self.exit() here
+        # would race — and usually beat — that finally, so the handoff file never
+        # gets written. Let the worker own the exit.
+        self._input_queue.put(None)
 
     def action_compact_ctx(self) -> None:
         self._input_queue.put("compact")
@@ -630,8 +633,7 @@ class AssistantApp(App):
                 if user_input is None:
                     break
                 if user_input.lower() in ("quit", "exit"):
-                    self.call_from_thread(self.exit)
-                    break
+                    break  # exit is triggered after the finally (handoff) completes
                 if user_input.lower() == "compact":
                     result = buffer.compact(router.for_task("compaction"), memory)
                     self._sys(f"[dim][Compact: {escape(str(result))}][/dim]")
@@ -759,6 +761,14 @@ class AssistantApp(App):
                     transcript.system(f"Deferred compaction: {deferred}")
 
         finally:
+            # The app is still up here (exit is deferred to the end); tell the
+            # user why quitting pauses — the handoff/compaction LLM calls can take
+            # a few seconds, longer on a slow local model.
+            if session_handoff or (memory and buffer._messages):
+                try:
+                    self._sys("[dim][Saving session — handoff + memory…][/dim]")
+                except Exception:
+                    pass
             # Session handoff note — capture texture BEFORE exit-compaction
             # clears the buffer. Never breaks shutdown.
             if session_handoff:
@@ -788,6 +798,10 @@ class AssistantApp(App):
                 nudge_monitor.stop()
             if work_cycle:
                 work_cycle.stop()
+            # Now that shutdown work (handoff note, exit-compaction) is done,
+            # actually exit the app. Deferred to here so the handoff file is
+            # written before Textual tears the worker thread down.
+            self.call_from_thread(self.exit)
 
 
 # ------------------------------------------------------------------

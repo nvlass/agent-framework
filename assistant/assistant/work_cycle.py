@@ -124,6 +124,7 @@ class WorkCycle:
         max_iterations: int = 8,
         on_cycle=None,
         use_queue: bool = False,
+        tick_seconds: float = 5.0,
     ) -> None:
         """
         Args:
@@ -136,9 +137,12 @@ class WorkCycle:
             research_agenda:  Optional ResearchAgenda — focused topics become goals.
             memory_tools:     Optional MemoryTools — enables dream/replay cycles
                               (sampling memory pairs for associative synthesis).
-            interval_seconds: Seconds between cycles.
+            interval_seconds: Seconds between background cycles.
             max_iterations:   Max ReAct steps per cycle.
             on_cycle:         Callback(source, outcome, summary) after each cycle.
+            use_queue:        Route work through the unified two-tier queue.
+            tick_seconds:     Poll cadence — the max latency before a pending
+                              conversation turn / scheduled prompt is noticed.
         """
         sub_registry = ToolRegistry()
         for tool in executor.registry.list_tools():
@@ -164,6 +168,7 @@ class WorkCycle:
         self._use_queue = use_queue
         self._sched_seq = 0  # unique keys for scheduled items (never deduped)
         self._rng = random.Random()  # background weighted-lottery draws
+        self._tick = tick_seconds    # poll cadence: max latency to notice urgent work
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -193,7 +198,7 @@ class WorkCycle:
     def _run_rotation(self) -> None:
         next_cycle = time.time() + self._interval
         while not self._stop.is_set():
-            self._stop.wait(5)
+            self._stop.wait(self._tick)
             if self._stop.is_set():
                 break
             goal_desc = source = None
@@ -239,7 +244,7 @@ class WorkCycle:
         q = WorkQueue()  # urgent tier; background is paced separately, below
         next_bg = time.time() + self._interval
         while not self._stop.is_set():
-            self._stop.wait(5)
+            self._stop.wait(self._tick)
             if self._stop.is_set():
                 break
             self._enqueue_urgent(q)

@@ -146,8 +146,11 @@ nudge_interval: 0
 # Excluded from autonomous use: compact_context, decide_soul_proposal.
 #
 # work_cycle:
-#   interval: 3600        # seconds between cycles (0/absent = off)
+#   interval: 3600        # seconds between background cycles (0/absent = off)
 #   max_iterations: 8     # max reason→act steps per cycle
+#   tick_seconds: 5       # poll cadence: max latency to notice a pending
+#                         #   conversation turn / scheduled task. Lower = snappier
+#                         #   inter-agent replies, more frequent polling.
 #   use_queue: false      # EXPERIMENTAL: route work through the unified two-tier
 #                         #   queue (urgent strict-priority + background weighted
 #                         #   lottery) instead of the rotation loop. Default off;

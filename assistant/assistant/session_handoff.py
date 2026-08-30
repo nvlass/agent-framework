@@ -103,6 +103,9 @@ class SessionHandoff:
         break shutdown.
         """
         if not (conversation_text or "").strip():
+            logger.info("Handoff: nothing to save — no session content "
+                        "(an agent that lives on the bus/work-cycle may have an "
+                        "empty interactive buffer). Skipping.")
             return None
         # Local imports avoid a module-load cycle (conversation imports config,
         # config builds SessionHandoff).
@@ -118,11 +121,13 @@ class SessionHandoff:
             note = strip_channel_markup(
                 (resp["choices"][0]["message"].get("content") or "").strip())
         except Exception as exc:
-            logger.warning("Handoff note generation failed: %s", exc)
+            logger.warning("Handoff: note generation failed (%s). Not saved.", exc)
             return None
-        if note:
-            self.write(note)
-        return note or None
+        if not note:
+            logger.warning("Handoff: model returned an empty note. Not saved.")
+            return None
+        self.write(note)
+        return note
 
     # --- helpers ------------------------------------------------------------
 

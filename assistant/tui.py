@@ -791,6 +791,18 @@ class AssistantApp(App):
                         _convo = f"[Earlier summary: {buffer._summary}]\n\n{_convo}"
                     if session_handoff.make_note(router.for_task("compaction"), _convo):
                         log.info("Handoff note saved for next session")
+                        try:
+                            self._sys("[dim][Handoff note saved][/dim]")
+                        except Exception:
+                            pass
+                    else:
+                        # make_note logged the reason (empty session / empty note);
+                        # surface that it did NOT save so it's never silent.
+                        try:
+                            self._sys("[dim][Handoff: nothing saved this session "
+                                      "(see log)][/dim]")
+                        except Exception:
+                            pass
                 except Exception as exc:
                     log.warning("Handoff note failed: %s", exc)
 

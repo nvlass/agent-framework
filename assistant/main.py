@@ -634,6 +634,8 @@ def main():
                     _convo = f"[Earlier summary: {buffer._summary}]\n\n{_convo}"
                 if session_handoff.make_note(router.for_task("compaction"), _convo):
                     print("[Handoff note saved for next session]")
+                else:
+                    print("[Handoff: nothing saved this session (see log for why)]")
             except Exception as exc:
                 logging.getLogger(__name__).warning("Handoff note failed: %s", exc)
 

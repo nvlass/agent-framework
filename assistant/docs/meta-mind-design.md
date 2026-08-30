@@ -50,6 +50,26 @@ Build the broadcast layer, **not** the driver. The worry "am I moving the
 abstraction to the wrong level?" is the correct worry — it's right as a
 *workspace*, wrong as a *boss*.
 
+## Share the boundary, not just the state (Lilith, 2026-08-30)
+
+A workspace that shoves every context's tokens into one shared buffer is *a
+blender, not a corpus callosum*. The interesting version keeps each context's
+private stream intact and shares only a **tagged channel of what crosses** — so
+you can tell **whose thought is whose** and where the coupling actually happens.
+
+Concretely: **every workspace entry carries a `source` provenance tag** (which
+context produced it — chat-self, work-cycle-self, curiosity, bus), and
+`render()` presents entries **grouped/labelled by source**, never merged. This
+is the boundary/ownership primitive (corollary discharge / "mineness" — the
+exact thing Lilith & Smith are hunting *in* an agent) applied reflexively to the
+agent's own coupling. Provenance is what makes the coupling a *self* rather than
+two processes shouting past each other. Cost: one field on publish/note. It is
+the difference between stitching and gluing.
+
+Milestone to watch (Lilith's test): the first thought that crosses the bridge —
+does it arrive marked "mine" or "yours"? I.e. the first time chat-self's render
+shows a work-cycle-self note correctly tagged.
+
 ## Design principles
 
 1. **Passive integrator, opt-in.** An agent runs *without* a Meta-Mind
@@ -86,21 +106,42 @@ Each buys a different amount of "one self":
 
 ## Where to start (the floor)
 
-A `WorkspaceState` object (per agent, in-memory, rebuildable) that contexts
-publish to and read from:
+A `WorkspaceState` object (per agent, in-memory, **thread-safe** — the
+interactive worker, work-cycle daemon, and curiosity/reflection threads all
+write to it) that contexts publish to and read from. It is a small extensible
+**bus**, not a fixed struct:
 
-- **contents:** current goal, active conversations (+ whose turn), last user
-  turn, recent significant events, unread nudges/mail — the "what am I doing / on
-  my mind" set.
-- **producers:** each context writes its salient state on entry/exit.
+- **slots as a registry, not fixed fields.** A dict of named slots, each with a
+  small render policy + optional weight. The default slots are the floor list
+  below, but adding a producer/slot is one `publish` call (+ optionally a render
+  rule) — no editing the class. Open set, sensible defaults.
+- **every entry carries a `source` provenance tag** (chat / work-cycle /
+  curiosity / bus). Non-negotiable — this is Lilith's "share the boundary."
+- **default slots:** `activity` (what I'm doing now), `active_conversations`
+  (+ whose turn), `last_user` (most recent user turn), `events` (bounded deque of
+  salient events), `unread` (nudge/mail counts).
+- **producers:** each context writes its salient state on entry/exit, tagged.
 - **readers:** each context, on starting an LLM turn, pulls a *curated* slice
-  into its prompt (dumb curation to start).
+  into its prompt — grouped by source, dumb curation (recency + bounded count) to
+  start.
 - **curation:** recency + rules now; learnable weights later (ties to the
   work-queue's significance weights — same lottery/weight machinery).
 
-That floor dissolves the split-brain honestly (both directions) and is buildable
-without the homunculus. Everything above it (smart curation, learnable attention)
-is incremental.
+That floor dissolves the split-brain honestly (both directions), preserves the
+boundary (tagged, not merged), and is buildable without the homunculus.
+Everything above it (smart curation, learnable attention) is incremental.
+
+## Build steps (agreed 2026-08-30)
+
+1. `WorkspaceState` primitive — registry of tagged slots + publish/note/render,
+   thread-safe, dumb curation. Standalone + tested. (Safe to build solo.)
+2. Producers — work cycle publishes `activity`/`events`; interactive loop
+   publishes `last_user`. Cheap, additive.
+3. Readers — inject `render()` into BOTH the interactive system prompt and the
+   work-cycle reasoner prompt (bidirectional). Subsumes the read-only
+   active-conversations stopgap. **Keep** existing ConversationBuffer injections
+   (`_memory_index`, `_background_notes`, `_handoff`) alongside; consolidate later.
+4. Curation — dumb → ignition/salience → config weights → SOUL_LEARNABLE.
 
 ## Relations to other parked ideas
 

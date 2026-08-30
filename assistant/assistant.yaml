@@ -64,6 +64,12 @@ data_db: assistant_data.db
 # Auto-compact conversation when it exceeds this many characters.
 max_chars: 32000
 
+# Meta-Mind — a shared "global workspace" so the agent's conversational self and
+# its autonomous work-cycle self aren't blind to each other (cures the split
+# brain). Each context publishes source-tagged salient state; both read a
+# by-source summary into their prompt. Off by default. See docs/meta-mind-design.md.
+#   meta_mind: true
+
 # Per-request LLM timeout (seconds). Omit to use the backend default: 120s for
 # cloud providers, 300s for local llama-server. Raise it for a slow local
 # (reasoning) model on CPU — a 3B generating a long think + reply can exceed

@@ -56,6 +56,7 @@ class ConversationBuffer:
     _memory_index: str = ""  # tag cloud: what the agent has memories about
     _compact_requested: bool = False  # agent asked to compact; runs at turn end
     _handoff: str = ""  # continuity note from the previous session (texture)
+    _workspace: str = ""  # Meta-Mind: what the agent's other contexts are doing
 
     # --- message building ---------------------------------------------------
 
@@ -91,6 +92,15 @@ class ConversationBuffer:
         decide to recall what it doesn't know it knows.
         """
         self._memory_index = tag_cloud
+
+    def set_workspace(self, rendered: str) -> None:
+        """Set the Meta-Mind workspace view injected into the system prompt.
+
+        A source-tagged summary of what the agent's *other* contexts (work cycle,
+        curiosity, bus) are doing — so the conversational self isn't blind to its
+        autonomous self. Refreshed each turn by the caller.
+        """
+        self._workspace = rendered or ""
 
     def set_handoff(self, note: str) -> None:
         """Seed the session-continuity note from the previous session.
@@ -156,6 +166,8 @@ class ConversationBuffer:
                 f"(weighted count): {self._memory_index}. "
                 f"Use the recall tool when a conversation touches one of these.]"
             )
+        if self._workspace:
+            system_content += f"\n\n{self._workspace}"
         system_content += f"\n\nCurrent date and time: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         return [
             {"role": "system", "content": system_content},

@@ -59,10 +59,11 @@ class LLMReasoner(ReasonerInterface):
     """ReasonerInterface backed by a chat LLM with native function calling."""
 
     def __init__(self, llm, soul_text: str = "", temperature: float = 0.4,
-                 max_tokens: int = 2048) -> None:
+                 max_tokens: int = 2048, workspace=None) -> None:
         self._llm = llm
         self._temperature = temperature
         self._max_tokens = max_tokens
+        self._workspace = workspace  # Meta-Mind: what my other contexts are doing
         soul = soul_text.strip()[:_SOUL_EXCERPT_CHARS]
         self._system = _REASONER_SYSTEM.format(
             soul=f"Your identity:\n{soul}" if soul else ""
@@ -77,8 +78,13 @@ class LLMReasoner(ReasonerInterface):
             obs_block = f"Steps taken so far (tool: result):\n{obs_lines}\n"
         else:
             obs_block = "No steps taken yet.\n"
+        system = self._system
+        if self._workspace is not None:
+            ws = self._workspace.render()
+            if ws:
+                system = f"{system}\n\n{ws}"
         messages = [
-            {"role": "system", "content": self._system},
+            {"role": "system", "content": system},
             {"role": "user", "content": _REASONER_USER.format(
                 goal=goal.description, observations=obs_block)},
         ]
@@ -125,6 +131,7 @@ class WorkCycle:
         on_cycle=None,
         use_queue: bool = False,
         tick_seconds: float = 5.0,
+        workspace=None,
     ) -> None:
         """
         Args:
@@ -149,7 +156,8 @@ class WorkCycle:
             if tool.name not in _EXCLUDED_TOOLS:
                 sub_registry.register(tool)
         self._executor = ToolExecutor(sub_registry, permission_checker=lambda _: True)
-        self._reasoner = LLMReasoner(llm, soul_text=soul_text)
+        self._workspace = workspace  # Meta-Mind global workspace (opt-in)
+        self._reasoner = LLMReasoner(llm, soul_text=soul_text, workspace=workspace)
         self._soul = soul_text
         self._journal = journal
         self._todos = todo_db
@@ -478,6 +486,9 @@ class WorkCycle:
     def run_cycle(self, goal_desc: str, source: str) -> str:
         """Run one bounded ReAct session. Returns the outcome summary."""
         log.info("Work cycle starting (source=%s): %.120s", source, goal_desc)
+        if self._workspace is not None:
+            self._workspace.publish("activity", f"{source}: {goal_desc[:100]}",
+                                    source="work-cycle")
         context = SharedContext(goal=Goal(description=goal_desc))
         loop = ReactLoop(self._executor, self._reasoner,
                          max_iterations=self._max_iterations)
@@ -506,6 +517,11 @@ class WorkCycle:
             )
         log.info("Work cycle %s after %d steps (source=%s)",
                  outcome, result.iterations, source)
+        if self._workspace is not None:
+            self._workspace.note(f"{source} {outcome}: {summary[:160]}"
+                                 if summary else f"{source} {outcome}",
+                                 source="work-cycle")
+            self._workspace.clear_slot("activity")  # cycle done — no longer busy
         if self._on_cycle:
             try:
                 self._on_cycle(source, outcome, summary)

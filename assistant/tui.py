@@ -30,6 +30,7 @@ from textual.widgets import Footer, Header, Input, RichLog, TabbedContent, TabPa
 from agent_tools.core.executor import ToolExecutor
 
 from assistant.conversation import ConversationBuffer, _call_llm_raw
+from assistant.workspace import WorkspaceState
 from assistant.inner_voice import InnerVoice
 from assistant.pending_messages import PendingMessages
 from assistant.skills import SkillLibrary
@@ -406,6 +407,10 @@ class AssistantApp(App):
                 buffer.set_handoff(_last_note)
                 self._sys("[dim][Handoff: resumed from last session's note][/dim]")
 
+        # Meta-Mind global workspace (opt-in): shared source-tagged bridge between
+        # the conversational self and the work-cycle self.
+        workspace = WorkspaceState() if cfg.get("meta_mind", False) else None
+
         skills_dir = (
             soul_manager._soul_path.parent / "skills"
             if soul_manager._soul_path
@@ -538,6 +543,7 @@ class AssistantApp(App):
                 max_iterations=int(wc_cfg.get("max_iterations", 8)),
                 use_queue=bool(wc_cfg.get("use_queue", False)),
                 tick_seconds=float(wc_cfg.get("tick_seconds", 5.0)),
+                workspace=workspace,
                 on_cycle=lambda source, outcome, summary: (
                     buffer.add_background_note(
                         f"[Work cycle/{source}] {outcome}: {summary[:400]}"),
@@ -644,6 +650,8 @@ class AssistantApp(App):
                 transcript.user(user_input)
                 self._chat(f"[bold green]You:[/bold green] {escape(user_input)}")
                 buffer.add_user(user_input)
+                if workspace:
+                    workspace.publish("last_user", user_input, source="chat")
 
                 # Auto-compact before LLM call
                 if buffer.should_compact():
@@ -686,6 +694,10 @@ class AssistantApp(App):
                                 f"said: {c['last_message']}"
                             )
                             self._conversation_bus.acknowledge(c["id"])
+
+                # Refresh the Meta-Mind view: what the other contexts are doing.
+                if workspace:
+                    buffer.set_workspace(workspace.render())
 
                 # Agentic tool loop
                 while True:

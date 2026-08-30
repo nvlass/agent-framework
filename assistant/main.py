@@ -57,6 +57,7 @@ from assistant.config import (
     resolve as _resolve,
 )
 from assistant.conversation import ConversationBuffer, _call_llm_raw
+from assistant.workspace import WorkspaceState
 from assistant.inner_voice import InnerVoice
 from assistant.pending_messages import PendingMessages
 from assistant.skills import SkillLibrary
@@ -258,6 +259,10 @@ def main():
         if _last_note:
             buffer.set_handoff(_last_note)
             print("[Handoff: resumed from last session's note]")
+
+    # Meta-Mind global workspace (opt-in): the shared, source-tagged bridge so the
+    # conversational self and the work-cycle self aren't blind to each other.
+    workspace = WorkspaceState() if cfg.get("meta_mind", False) else None
     skills_dir = (
         soul_manager._soul_path.parent / "skills"
         if soul_manager._soul_path
@@ -347,6 +352,7 @@ def main():
             max_iterations=int(wc_cfg.get("max_iterations", 8)),
             use_queue=bool(wc_cfg.get("use_queue", False)),
             tick_seconds=float(wc_cfg.get("tick_seconds", 5.0)),
+            workspace=workspace,
             on_cycle=lambda source, outcome, summary: (
                 buffer.add_background_note(
                     f"[Work cycle/{source}] {outcome}: {summary[:400]}"),
@@ -499,6 +505,8 @@ def main():
 
             transcript.user(user_input)
             buffer.add_user(user_input)
+            if workspace:
+                workspace.publish("last_user", user_input, source="chat")
 
             # Auto-compact before the LLM call so it never sees a bloated context
             if buffer.should_compact():
@@ -541,6 +549,11 @@ def main():
                             f"said: {c['last_message']}"
                         )
                         conversation_bus.acknowledge(c["id"])
+
+            # Refresh the Meta-Mind view so this turn sees what the other
+            # contexts have been up to (source-tagged).
+            if workspace:
+                buffer.set_workspace(workspace.render())
 
             # Agentic tool loop — keep calling until the model stops using tools
             while True:

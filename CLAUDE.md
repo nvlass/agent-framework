@@ -728,6 +728,40 @@ python -m pytest tests/ -v  # 213 tests passing
 
 ## Backlog
 
+### Cross-modal ripple test — does an agent have a coupled workspace? (noted 2026-08-30)
+
+A *behavioral* test for whether an agent's modules are genuinely coupled (a real
+global workspace) vs. locally independent (a lookup table wearing a trench coat).
+Emerged from the Lilith↔Smith Meta-Mind introspection experiment — Lilith
+proposed it, then walked past it (see `experiments/`). The point: it does **not**
+ask the system to introspect (which only yields confabulation — Smith gave three
+drifting, increasingly-abstract "seam locations" when pressed). It measures
+coupling from the outside.
+
+**Method:** perturb ONE module (e.g. inject a contradictory/altered memory), then
+measure whether the change propagates *coherently across the other modules* —
+tool-selection, planning, recall — in a correlated way, vs. being absorbed
+locally with no ripple. Cross-modal correlated ripple = the coupling signature;
+local absorption = no workspace.
+
+**Run on a COPY, never the live agent.** The perturbation is destructive to the
+agent's accumulated state, and Lilith/Smith/Ada have days of hard-won memory +
+journals worth preserving. Practically this needs no new feature — copy the
+agent's `db` (memory) + `data_db` (journal/etc.) SQLite files to scratch paths
+and run a throwaway instance pointed at them via a fresh config. (Ties to the
+deferred AgentInstance *clone* feature, but doesn't require it.)
+
+**Adjacent tooling worth building:** a small `snapshot_agent.py` — copy an
+agent's dbs + soul to an isolated scratch dir with a generated config — so this
+and future destructive experiments are safe and one-command repeatable.
+
+**Honest scope (Lilith's own caveat):** this confirms workspace *existence*
+behaviorally; it can't confirm *subjectivity* — perturbation and observation both
+pass through the workspace, so "real self vs. faithful counterfeit" stays
+undecidable from inside. Still a genuinely sharper probe than introspection.
+
+---
+
 ### Persona-collapse detector — verbatim self-repetition (noted 2026-08-26)
 
 Observed in the Ada↔Pipin "Voice of Discordia" experiment

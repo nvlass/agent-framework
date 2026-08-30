@@ -728,6 +728,34 @@ python -m pytest tests/ -v  # 213 tests passing
 
 ## Backlog
 
+### Open question: what crosses the restart boundary for an *autonomous* agent? (noted 2026-08-30)
+
+`session_handoff` captures interactive-chat **texture** (warm, first-person "where
+we left off"). But an agent that lives on the bus/work-cycle has a thin/empty
+interactive buffer — its real "session" was autonomous (bus debates, research,
+dreams), which handoff never sees. So autonomous agents frequently get an empty
+handoff (now *visible*, not silent — commit c0ed652).
+
+The tempting fix — feed handoff the workspace `render()` + recent journal so it
+captures more — is NOT an obvious yes. It raises a real question:
+
+- Does that keep handoff a **texture** note (feel), or turn it into an **activity
+  summary** (a different artifact — closer to the backlog *agent-summary /
+  status-report* tool)? Conflating the two registers may muddy both.
+- What even *is* a "session" for a continuously-running daemon? Handoff assumes a
+  start/end (interactive); a daemon's life is continuous — "between sessions"
+  doesn't cleanly map.
+- Division of labor: maybe handoff stays interactive-texture-only, **memory**
+  carries facts, and the **agent-summary tool** carries "what did I do / how have
+  I drifted" — three artifacts, three registers. OR a single unified continuity
+  note. Unclear which is right, and the answer shapes all three features.
+
+Not a decision — a genuinely interesting question about what *continuity* means
+for an agent whose life isn't sessioned. Related: session_handoff (texture),
+agent-summary tool (activity/drift), the Meta-Mind workspace (could feed either).
+
+---
+
 ### Cross-modal ripple test — does an agent have a coupled workspace? (noted 2026-08-30)
 
 A *behavioral* test for whether an agent's modules are genuinely coupled (a real
